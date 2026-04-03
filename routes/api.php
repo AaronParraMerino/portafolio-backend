@@ -12,6 +12,8 @@ Route::get('/ping', function () {
     ]);
 });
 
+require app_path('Profile\Routes\profile.php');
+
 // Ejemplo de ruta real
 Route::get('/cotizaciones', function () {
     return response()->json([
