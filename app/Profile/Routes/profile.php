@@ -7,7 +7,7 @@ Route::prefix('profile')->group(function () {
 
     Route::get('{userId}', [ProfileController::class, 'show']);
 
-    Route::put('{userId}', [ProfileController::class, 'update']);
+    //Route::put('{userId}', [ProfileControllerMock::class, 'update']);
 
-    Route::patch('{userId}/visibility', [ProfileController::class, 'updateVisibility']);
+    //Route::patch('{userId}/visibility', [ProfileControllerMock::class, 'updateVisibility']);
 });
