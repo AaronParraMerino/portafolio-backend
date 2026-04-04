@@ -4,23 +4,27 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Usuario;
+use App\Services\UsuarioService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 
 class UsuarioController extends Controller
 {
+    public function __construct(private readonly UsuarioService $usuarioService)
+    {
+    }
+
     public function index(): JsonResponse
     {
-        $usuarios = Usuario::all();
+        $usuarios = $this->usuarioService->getAll();
 
         return response()->json($usuarios);
     }
 
     public function show($id): JsonResponse
     {
-        $usuario = Usuario::find($id);
+        $usuario = $this->usuarioService->findById((int) $id);
 
         if (! $usuario) {
             return response()->json([
@@ -49,12 +53,7 @@ class UsuarioController extends Controller
         }
 
         $data = $validator->validated();
-        $data['password'] = Hash::make($data['password']);
-        $data['rol'] = 'usuario';
-        $data['estado'] = 'activo';
-        $data['intentos_fallidos'] = 0;
-
-        $usuario = Usuario::create($data);
+        $usuario = $this->usuarioService->create($data);
 
         return response()->json([
             'message' => 'Usuario creado correctamente',
@@ -64,7 +63,7 @@ class UsuarioController extends Controller
 
     public function update(Request $request, $id): JsonResponse
     {
-        $usuario = Usuario::find($id);
+        $usuario = $this->usuarioService->findById((int) $id);
 
         if (! $usuario) {
             return response()->json([
@@ -91,12 +90,7 @@ class UsuarioController extends Controller
         }
 
         $data = $validator->validated();
-
-        if (isset($data['password'])) {
-            $data['password'] = Hash::make($data['password']);
-        }
-
-        $usuario->update($data);
+        $usuario = $this->usuarioService->update($usuario, $data);
 
         return response()->json([
             'message' => 'Usuario actualizado correctamente',
@@ -106,7 +100,7 @@ class UsuarioController extends Controller
 
     public function destroy($id): JsonResponse
     {
-        $usuario = Usuario::find($id);
+        $usuario = $this->usuarioService->findById((int) $id);
 
         if (! $usuario) {
             return response()->json([
@@ -114,7 +108,7 @@ class UsuarioController extends Controller
             ], 404);
         }
 
-        $usuario->delete();
+        $this->usuarioService->delete($usuario);
 
         return response()->json([
             'message' => 'Usuario eliminado correctamente',

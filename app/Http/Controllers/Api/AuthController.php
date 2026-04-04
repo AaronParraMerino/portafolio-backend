@@ -3,14 +3,17 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Usuario;
+use App\Services\AuthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
+    public function __construct(private readonly AuthService $authService)
+    {
+    }
+
     public function register(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
@@ -29,18 +32,12 @@ class AuthController extends Controller
         }
 
         $data = $validator->validated();
-        $data['password'] = Hash::make($data['password']);
-        $data['rol'] = 'usuario';
-        $data['estado'] = 'activo';
-        $data['intentos_fallidos'] = 0;
+        $result = $this->authService->register($data);
 
-        $usuario = Usuario::create($data);
-        
-        $token = $usuario->createToken('auth_token')->plainTextToken;
         return response()->json([
             'message' => 'Usuario registrado correctamente',
-            'token' => $token,
-            'data' => $usuario,
+            'token' => $result['token'],
+            'data' => $result['usuario'],
         ], 201);
     }
 
@@ -60,26 +57,24 @@ class AuthController extends Controller
 
         $data = $validator->validated();
 
-        $usuario = Usuario::where('correo', $data['correo'])->first();
+        $result = $this->authService->attemptLogin($data);
 
-        if (! $usuario || ! Hash::check($data['password'], $usuario->password)) {
+        if ($result['status'] === 'invalid') {
             return response()->json([
                 'message' => 'Credenciales incorrectas',
             ], 401);
         }
 
-        if ($usuario->estado === 'bloqueado') {
+        if ($result['status'] === 'blocked') {
             return response()->json([
                 'message' => 'Usuario bloqueado',
             ], 403);
         }
-
-        $token = $usuario->createToken('auth_token')->plainTextToken;
         
         return response()->json([
             'message' => 'Inicio de sesión correcto',
-            'token' => $token,
-            'data' => $usuario,
+            'token' => $result['token'],
+            'data' => $result['usuario'],
         ], 200);
     }
 
@@ -93,7 +88,7 @@ class AuthController extends Controller
             ], 401);
         }
 
-        $user->currentAccessToken()->delete();
+        $this->authService->logout($user);
 
         return response()->json([
             'message' => 'Sesión cerrada correctamente',
