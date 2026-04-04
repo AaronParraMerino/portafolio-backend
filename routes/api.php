@@ -2,8 +2,16 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\AuthController;
+############# funciones de rutas para usuarios #############
+require __DIR__.'/api/auth.php';
 
+
+############# datos tabla usuario ##########
+require __DIR__.'/api/usuarios.php';
+
+
+
+#############################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
     return response()->json([
@@ -20,6 +28,3 @@ Route::get('/cotizaciones', function () {
         'message' => 'Lista de cotizaciones'
     ]);
 });
-
-// Rutas de autenticación
-Route::post('/register', [AuthController::class, 'register']);

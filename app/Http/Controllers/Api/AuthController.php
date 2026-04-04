@@ -3,23 +3,50 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Usuario;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
     public function register(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'nombre' => ['required', 'string', 'max:120'],
-            'apellido' => ['required', 'string', 'max:120'],
-            'email' => ['required', 'string', 'email', 'max:255'],
-            'password' => ['required', 'string', 'min:8', 'max:72'],
-            'telefono' => ['required', 'string', 'min:7', 'max:20'],
+            'nombre' => ['required', 'string', 'max:255'],
+            'apellido' => ['required', 'string', 'max:255'],
+            'correo' => ['required', 'email', 'max:255', 'unique:usuarios,correo'],
+            'password' => ['required', 'string', 'min:8'],
+            'telefono' => ['nullable', 'string', 'max:20'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Datos inválidos',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $data = $validator->validated();
+        $data['password'] = Hash::make($data['password']);
+        $data['rol'] = 'usuario';
+        $data['estado'] = 'activo';
+        $data['intentos_fallidos'] = 0;
+
+        $usuario = Usuario::create($data);
+
+        return response()->json([
+            'message' => 'Usuario registrado correctamente',
+            'data' => $usuario,
+        ], 201);
+    }
+
+    public function login(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'correo' => ['required', 'email'],
+            'password' => ['required', 'string'],
         ]);
 
         if ($validator->fails()) {
@@ -31,40 +58,30 @@ class AuthController extends Controller
 
         $data = $validator->validated();
 
-        if (DB::table('auth.users')->where('email', $data['email'])->exists()) {
-            return response()->json(['message' => 'Email ya registrado'], 409);
+        $usuario = Usuario::where('correo', $data['correo'])->first();
+
+        if (! $usuario || ! Hash::check($data['password'], $usuario->password)) {
+            return response()->json([
+                'message' => 'Credenciales incorrectas',
+            ], 401);
         }
 
-        if (DB::table('auth.users')->where('phone', $data['telefono'])->exists()) {
-            return response()->json(['message' => 'Teléfono ya registrado'], 409);
+        if ($usuario->estado === 'bloqueado') {
+            return response()->json([
+                'message' => 'Usuario bloqueado',
+            ], 403);
         }
-
-        $userId = (string) Str::uuid();
-
-        DB::table('auth.users')->insert([
-            'id' => $userId,
-            'aud' => 'authenticated',
-            'role' => 'authenticated',
-            'email' => $data['email'],
-            'encrypted_password' => Hash::make($data['password']),
-            'phone' => $data['telefono'],
-            'raw_user_meta_data' => json_encode([
-                'nombre' => $data['nombre'],
-                'apellido' => $data['apellido'],
-            ], JSON_UNESCAPED_UNICODE),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
 
         return response()->json([
-            'message' => 'Usuario registrado',
-            'data' => [
-                'id' => $userId,
-                'email' => $data['email'],
-                'telefono' => $data['telefono'],
-                'nombre' => $data['nombre'],
-                'apellido' => $data['apellido'],
-            ],
-        ], 201);
+            'message' => 'Inicio de sesión correcto',
+            'data' => $usuario,
+        ], 200);
+    }
+
+    public function logout(Request $request): JsonResponse
+    {
+        return response()->json([
+            'message' => 'Sesión cerrada correctamente',
+        ], 200);
     }
 }
