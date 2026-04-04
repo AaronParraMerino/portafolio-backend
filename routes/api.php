@@ -2,7 +2,16 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+############# funciones de rutas para usuarios #############
+require __DIR__.'/api/auth.php';
 
+
+############# datos tabla usuario ##########
+require __DIR__.'/api/usuarios.php';
+
+
+
+#############################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
     return response()->json([
