@@ -2,6 +2,7 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\AuthController;
 
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
@@ -19,3 +20,6 @@ Route::get('/cotizaciones', function () {
         'message' => 'Lista de cotizaciones'
     ]);
 });
+
+// Rutas de autenticación
+Route::post('/register', [AuthController::class, 'register']);
