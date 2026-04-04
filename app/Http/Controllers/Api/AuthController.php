@@ -35,9 +35,11 @@ class AuthController extends Controller
         $data['intentos_fallidos'] = 0;
 
         $usuario = Usuario::create($data);
-
+        
+        $token = $usuario->createToken('auth_token')->plainTextToken;
         return response()->json([
             'message' => 'Usuario registrado correctamente',
+            'token' => $token,
             'data' => $usuario,
         ], 201);
     }
@@ -72,14 +74,27 @@ class AuthController extends Controller
             ], 403);
         }
 
+        $token = $usuario->createToken('auth_token')->plainTextToken;
+        
         return response()->json([
             'message' => 'Inicio de sesión correcto',
+            'token' => $token,
             'data' => $usuario,
         ], 200);
     }
 
     public function logout(Request $request): JsonResponse
     {
+        $user = $request->user();
+
+        if (! $user || ! $user->currentAccessToken()) {
+            return response()->json([
+                'message' => 'No hay sesión activa',
+            ], 401);
+        }
+
+        $user->currentAccessToken()->delete();
+
         return response()->json([
             'message' => 'Sesión cerrada correctamente',
         ], 200);
