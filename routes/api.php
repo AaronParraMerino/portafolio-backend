@@ -8,8 +8,7 @@ require __DIR__.'/api/auth.php';
 
 ############# datos tabla usuario ##########
 require __DIR__.'/api/usuarios.php';
-
-
+require __DIR__.'/api/profile.php';
 
 #############################################
 // Ruta de prueba para verificar la conexión
@@ -21,7 +20,6 @@ Route::get('/ping', function () {
     ]);
 });
 
-require app_path('Profile\Routes\profile.php');
 
 // Ejemplo de ruta real
 Route::get('/cotizaciones', function () {

@@ -1,8 +1,8 @@
 <?php
 
-namespace App\Profile\Controllers;
+namespace App\Http\Controllers\Api;
 
-use App\Profile\Services\ProfileService;
+use App\Services\api\ProfileService;
 use Illuminate\Http\Request;
 
 class ProfileController
@@ -36,6 +36,9 @@ class ProfileController
     {
         $data = $request->only([
             'correo',
+            'nombre',
+            'apellido',
+            'profesion',
             'telefono',
             'biografia',
             'ciudad',

@@ -1,8 +1,11 @@
 <?php
 
-namespace App\Profile\Services;
+namespace App\Services\api;
 
 use Illuminate\Support\Facades\DB;
+use App\Models\Usuario;
+use App\Models\Perfil;
+use App\Models\VisibilidadCampo;
 
 class ProfileService
 {
@@ -15,34 +18,25 @@ class ProfileService
      */
     public function getProfile(int $userId): array
     {
-        // Usuario
-        $usuario = DB::table('usuarios')
-            ->where('id_usuario', $userId)
-            ->first();
+        $usuario = Usuario::with(['perfil', 'visibilidades'])
+            ->findOrFail($userId);
 
-        if (!$usuario) {
-            abort(404, 'Usuario no encontrado');
-        }
+        $perfil = $usuario->perfil;
 
-        // Perfil
-        $perfil = DB::table('perfiles')
-            ->where('usuario_id', $userId)
-            ->first();
-
-        // Visibilidad
-        $visibilidadRaw = DB::table('visibilidad_campos')
-            ->where('usuario_id', $userId)
+        $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
             ->toArray();
-
+        
         return [
             'id' => $usuario->id_usuario,
-            'nombre' => $usuario->nombre . ' ' . $usuario->apellido,
+            'nombre' => $usuario->nombre,
+            'apellido' => $usuario->apellido,
             'correo' => $usuario->correo,
             'telefono' => $usuario->telefono,
-            'biografia' => $perfil->biografia ?? null,
-            'ciudad' => $perfil->ciudad ?? null,
-            'pais' => $perfil->pais ?? null,
+            'profesion' => $perfil?->profesion,
+            'biografia' => $perfil?->biografia,
+            'ciudad' => $perfil?->ciudad,
+            'pais' => $perfil?->pais,
 
             'visibilidad' => [
                 'nombre' => true,
@@ -51,16 +45,6 @@ class ProfileService
                 'biografia' => $visibilidadRaw['biografia'] ?? false,
                 'pais' => $visibilidadRaw['pais'] ?? false,
                 'ciudad' => $visibilidadRaw['ciudad'] ?? false,
-            ],
-            'stats' => [
-                'proyectos' => 0,
-                'habilidades' => 0,
-                'completitud' => 0,
-            ],
-
-            'habilidades' => [
-                ['id' => 1, 'nombre' => 'Laravel', 'tipo' => 'tecnica', 'nivel' => 'avanzado'],
-                ['id' => 2, 'nombre' => 'React', 'tipo' => 'tecnica', 'nivel' => 'avanzado'],
             ],
         ];
     }
@@ -71,12 +55,11 @@ class ProfileService
     
     private function updateUsuarios(int $userId, array $data): void
     {
-
         if (empty($data)) return;
 
-        DB::table('usuarios')
-            ->where('id_usuario', $userId)
-            ->update($data);
+        $usuario = Usuario::findOrFail($userId);
+
+        $usuario->update($data);
     }
         /**
      * Inserta la visibilidad de un campo específico (para datos nuevos)
@@ -85,11 +68,15 @@ class ProfileService
 
         private function visibility(int $userId, string $campo): void
         {
-            DB::table('visibilidad_campos')->insertOrIgnore([
-                'usuario_id' => $userId,
-                'campo' => $campo,
-                'visible' => DB::raw('true')
-            ]);
+            VisibilidadCampo::firstOrCreate(
+                [
+                    'usuario_id' => $userId,
+                    'campo' => $campo,
+                ],
+                [
+                    'visible' => DB::raw('true')
+                ]
+            );
         }
         /**
          * Crea un nuevo perfil para el usuario
@@ -98,13 +85,15 @@ class ProfileService
          */
         private function crearPerfil(int $userId, array $data): void
         {
-            $insertData = $data;
-            $insertData['usuario_id'] = $userId;
+            // Crear perfil
+            Perfil::create([
+                'usuario_id' => $userId,
+                ...$data
+            ]);
 
-            DB::table('perfiles')->insert($insertData);
-
+            // Marcar visibilidad de cada campo recibido
             foreach ($data as $campo => $_) {
-                $this->addVisibility($userId, $campo);
+                $this->visibility($userId, $campo);
             }
         }
 
@@ -128,7 +117,7 @@ class ProfileService
 
                     // Si antes estaba vacío y ahora tiene valor → visibilidad
                     if ((is_null($valorActual) || $valorActual === '') && $nuevoValor !== null && $nuevoValor !== '') {
-                        $this->addVisibility($userId, $campo);
+                        $this->visibility($userId, $campo);
                     }
 
                     $updates[$campo] = $nuevoValor;
@@ -136,9 +125,7 @@ class ProfileService
             }
 
             if (!empty($updates)) {
-                DB::table('perfiles')
-                    ->where('usuario_id', $userId)
-                    ->update($updates);
+                $perfil->update($updates);
             }
         }
 
@@ -152,11 +139,9 @@ class ProfileService
     {
         if (empty($data)) return;
 
-        $perfil = DB::table('perfiles')
-            ->where('usuario_id', $userId)
-            ->first();
+        DB::transaction(function () use ($userId, $data) {
 
-        DB::transaction(function () use ($userId, $perfil, $data) {
+            $perfil = Perfil::where('usuario_id', $userId)->first();
 
             if ($perfil) {
                 $this->updatePerfilExistente($userId, $perfil, $data);
@@ -167,10 +152,10 @@ class ProfileService
     }
 
     /**
-     * Actualiza el perfil completo del usuario.
-     * - Separa los campos según su tabla destino (`usuarios` p `perfiles`).
-     * - Ejecuta ambas actualizaciones dentro de una transacción.
-     * - Retorna el perfil actualizado consolidado.
+     * Actualiza el perfil completo del usuario
+     * - Separa los campos según su tabla destino (`usuarios` p `perfiles`)
+     * - Ejecuta ambas actualizaciones dentro de una transacción
+     * - Retorna el perfil actualizado consolidado
      */
 
     public function updateProfile(int $userId, array $data): array
@@ -179,11 +164,11 @@ class ProfileService
         $perfiles = [];
 
         foreach ($data as $campo => $valor) {
-            if (in_array($campo, ['correo', 'telefono'])) {
+            if (in_array($campo, ['correo', 'telefono','nombre','apellido'])) {
                 $usuarios[$campo] = $valor;
             }
 
-            if (in_array($campo, ['biografia', 'ciudad', 'pais'])) {
+            if (in_array($campo, ['biografia', 'ciudad', 'pais','profesion'])) {
                 $perfiles[$campo] = $valor;
             }
         }
@@ -198,6 +183,35 @@ class ProfileService
                 $this->updatePerfiles($userId, $perfiles);
             }
         });
+
+        return $this->getProfile($userId);
+    }
+
+    
+    /**
+     * Actualiza múltiples campos de visibilidad de un usuario
+     * Ejemplo: ['correo' => true, 'telefono' => false]
+     */
+
+    public function updateVisibility(int $userId, array $data): array
+    {
+        $rows = [];
+
+        foreach ($data as $campo => $visible) {
+            $bool = filter_var($visible, FILTER_VALIDATE_BOOLEAN);
+
+            $rows[] = [
+                'usuario_id' => $userId,
+                'campo'      => $campo,
+                'visible'    => DB::raw($bool ? 'true' : 'false'),
+            ];
+        }
+
+        VisibilidadCampo::upsert(
+            $rows,
+            ['usuario_id', 'campo'],
+            ['visible']
+        );
 
         return $this->getProfile($userId);
     }
