@@ -50,4 +50,9 @@ class Usuario extends Model
     {
         return $this->hasMany(VisibilidadCampo::class, 'usuario_id', 'id_usuario');
     }
+
+    public function experiencias()
+    {
+        return $this->hasMany(Experiencia::class, 'usuario_id', 'id_usuario');
+    }
 }
