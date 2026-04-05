@@ -40,4 +40,14 @@ class Usuario extends Model
             'fecha_bloqueo' => 'datetime',
         ];
     }
+
+    public function perfil()
+    {
+        return $this->hasOne(Perfil::class, 'usuario_id', 'id_usuario');
+    }
+
+    public function visibilidades()
+    {
+        return $this->hasMany(VisibilidadCampo::class, 'usuario_id', 'id_usuario');
+    }
 }

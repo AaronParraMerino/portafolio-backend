@@ -21,6 +21,7 @@ return new class extends Migration
             $table->text('biografia')->nullable();
             $table->string('ciudad')->nullable();
             $table->string('pais')->nullable();
+            $table->string('profesion')->nullable();
             $table->string('foto_perfil')->nullable();
             $table->string('foto_fondo')->nullable();
 

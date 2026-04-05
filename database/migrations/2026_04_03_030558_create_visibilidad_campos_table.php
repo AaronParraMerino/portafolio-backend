@@ -18,7 +18,7 @@ return new class extends Migration
                 ->constrained('usuarios', 'id_usuario')
                 ->cascadeOnDelete();
 
-            $table->enum('campo', ['correo', 'telefono', 'pais','biografia','ciudad','linkedin','github']);
+            $table->enum('campo', ['correo', 'telefono', 'pais','biografia','ciudad','linkedin','github','profesion']);
             $table->boolean('visible')->default(true);
 
             $table->unique(['usuario_id', 'campo']);
