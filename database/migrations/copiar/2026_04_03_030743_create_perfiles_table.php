@@ -11,27 +11,29 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('enlaces_personales', function (Blueprint $table) {
-            $table->id('id_enlaceP');
+        Schema::create('perfiles', function (Blueprint $table) {
+            $table->id('id_perfil');
 
             $table->foreignId('usuario_id')
                 ->constrained('usuarios', 'id_usuario')
                 ->cascadeOnDelete();
 
-            $table->enum('tipo', ['github', 'linkedin']);
-            $table->string('url');
-            $table->string('etiqueta_custom')->nullable();
-            $table->boolean('visible')->default(true);
+            $table->text('biografia')->nullable();
+            $table->string('ciudad')->nullable();
+            $table->string('pais')->nullable();
+            $table->string('foto_perfil')->nullable();
+            $table->string('foto_fondo')->nullable();
+
+            $table->boolean('es_publico')->default(true);
             $table->timestamp('fecha_modificacion')->nullable();
-            $table->unique(['usuario_id', 'tipo']);
+            $table->unique('usuario_id');
         });
     }
-
     /**
      * Reverse the migrations.
      */
     public function down(): void
     {
-        Schema::dropIfExists('enlaces_personales');
+        Schema::dropIfExists('perfiles');
     }
 };

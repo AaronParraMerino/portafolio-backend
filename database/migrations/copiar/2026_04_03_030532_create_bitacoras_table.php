@@ -11,19 +11,20 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('enlaces_personales', function (Blueprint $table) {
-            $table->id('id_enlaceP');
+        Schema::create('bitacoras', function (Blueprint $table) {
+            $table->id('id_bitacora');
 
             $table->foreignId('usuario_id')
                 ->constrained('usuarios', 'id_usuario')
                 ->cascadeOnDelete();
 
-            $table->enum('tipo', ['github', 'linkedin']);
-            $table->string('url');
-            $table->string('etiqueta_custom')->nullable();
-            $table->boolean('visible')->default(true);
-            $table->timestamp('fecha_modificacion')->nullable();
-            $table->unique(['usuario_id', 'tipo']);
+            $table->string('accion');
+            $table->text('descripcion')->nullable();
+
+            $table->string('ip_address');
+            $table->string('user_agent')->nullable();
+
+            $table->timestamp('fecha');
         });
     }
 
@@ -32,6 +33,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('enlaces_personales');
+        Schema::dropIfExists('bitacoras');
     }
 };

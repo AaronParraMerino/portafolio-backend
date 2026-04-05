@@ -11,19 +11,18 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('enlaces_personales', function (Blueprint $table) {
-            $table->id('id_enlaceP');
+        Schema::create('token_recuperaciones', function (Blueprint $table) {
+            $table->id('id_tokenR');
 
             $table->foreignId('usuario_id')
                 ->constrained('usuarios', 'id_usuario')
                 ->cascadeOnDelete();
 
-            $table->enum('tipo', ['github', 'linkedin']);
-            $table->string('url');
-            $table->string('etiqueta_custom')->nullable();
-            $table->boolean('visible')->default(true);
-            $table->timestamp('fecha_modificacion')->nullable();
-            $table->unique(['usuario_id', 'tipo']);
+            $table->string('token_hash');
+            $table->enum('estado', ['activo', 'usado', 'expirado']);
+
+            $table->timestamp('fecha_expiracion');
+            $table->timestamp('fecha_creacion')->useCurrent();
         });
     }
 
@@ -32,6 +31,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('enlaces_personales');
+        Schema::dropIfExists('token_recuperaciones');
     }
 };

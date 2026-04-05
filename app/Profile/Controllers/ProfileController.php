@@ -14,6 +14,11 @@ class ProfileController
         $this->service = $service;
     }
 
+    /**
+     * Retorna el perfil completo de un usuario en formato JSON
+     * Delega toda la lógica al servicio
+     */
+
     public function show(int $userId)
     {
         return response()->json(
@@ -21,22 +26,33 @@ class ProfileController
         );
     }
 
+    /**
+     * Actualiza datos del perfil del usuario.
+     * Filtra únicamente los campos permitidos
+     * Evita que el cliente envíe campos no controlados.
+     * Delega la lógica de actualización al servicio.
+     */
     public function update(Request $request, int $userId)
     {
         $data = $request->only([
-            'nombre',
-            'apellido',
             'correo',
             'telefono',
             'biografia',
             'ciudad',
-            'pais'
+            'pais',
         ]);
 
         return response()->json(
             $this->service->updateProfile($userId, $data)
         );
     }
+
+    /**
+     * Actualiza la visibilidad de los campos del perfil.
+     * - Recibe un payload dinámico (campo => visibilidad).
+     * - No aplica filtrado explícito
+     * - Delega completamente la lógica al servicio.
+     */
 
     public function updateVisibility(Request $request, int $userId)
     {
