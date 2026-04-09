@@ -6,10 +6,12 @@ use Illuminate\Support\Facades\DB;
 use App\Models\Usuario;
 use App\Models\Perfil;
 use App\Models\VisibilidadCampo;
+use Illuminate\Support\Str;
 
 class ProfileService
 {
-        /**
+
+    /**
      * Obtiene el perfil completo de un usuario combinando datos de:
      * - usuario
      * - perfil
@@ -214,6 +216,252 @@ class ProfileService
         );
 
         return $this->getProfile($userId);
+    }
+
+    /**
+     * Seccion crud de imagenes de perfil---------------------------
+     *
+     */
+
+    /**
+     * Funcion para subir una imagen a Supabase Storage
+     *
+     */
+
+        function uploadImage($file, string $carpeta)
+    {
+        $bucket = env('SUPABASE_BUCKET');
+        $urlBase = env('SUPABASE_URL');
+        $key = env('SUPABASE_KEY');
+
+        $nombreArchivo = $carpeta . '/' . Str::uuid() . '.' . $file->getClientOriginalExtension();
+
+        $fileContent = file_get_contents($file->getRealPath());
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $nombreArchivo,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $fileContent,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'Content-Type: ' . $file->getMimeType(),
+            ],
+        ]);
+
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            throw new \Exception('Error al subir imagen a Supabase: ' . $error);
+        }
+
+        return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $nombreArchivo;
+    }
+
+        function deleteImage(string $urlImagen)
+    {
+        $bucket = env('SUPABASE_BUCKET');
+        $urlBase = env('SUPABASE_URL');
+        $key = env('SUPABASE_KEY');
+
+        // Extraer path del archivo desde la URL pública
+        $path = str_replace($urlBase . '/storage/v1/object/public/' . $bucket . '/', '', $urlImagen);
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $path,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'DELETE',
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+            ],
+        ]);
+
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            throw new \Exception('Error eliminando archivo en Supabase: ' . $error);
+        }
+
+        return true;
+    }
+
+    /**
+     * Funcion para agregar imagen de perfil o banner
+     *
+     */
+    function addImageProfileBanner(int $usuarioId, $file, string $tipo)
+    {
+        DB::beginTransaction();
+
+        try {
+            $perfil = Perfil::where('usuario_id', $usuarioId)->first();
+
+            if (!$perfil) {
+                throw new \Exception('Perfil no encontrado');
+            }
+
+            if (!in_array($tipo, ['profile', 'banner'])) {
+                throw new \Exception('Tipo inválido');
+            }
+
+            $carpeta = $tipo === 'profile' ? 'profile' : 'banner';
+
+            $urlImagen = $this->uploadImage($file, $carpeta);
+
+            if ($tipo === 'profile') {
+                $perfil->foto_perfil = $urlImagen;
+            } else {
+                $perfil->foto_fondo = $urlImagen;
+            }
+
+            $perfil->fecha_modificacion = now();
+            $perfil->save();
+
+            DB::commit();
+
+            return [
+                'status' => true,
+                'message' => 'Imagen actualizada correctamente',
+                'url' => $urlImagen
+            ];
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            return [
+                'status' => false,
+                'message' => 'Error al actualizar imagen',
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Funcion para eliminar imagen (perfil o banner)
+     */
+    function deleteProfileBannerImage(int $usuarioId, string $tipo)
+    {
+        DB::beginTransaction();
+
+        try {
+            $perfil = Perfil::where('usuario_id', $usuarioId)->first();
+
+            if (!$perfil) {
+                throw new \Exception('Perfil no encontrado');
+            }
+
+            if (!in_array($tipo, ['profile', 'banner'])) {
+                throw new \Exception('Tipo inválido');
+            }
+
+            $urlImagen = null;
+
+            if ($tipo === 'profile') {
+                $urlImagen = $perfil->foto_perfil;
+                $perfil->foto_perfil = null;
+            } else {
+                $urlImagen = $perfil->foto_fondo;
+                $perfil->foto_fondo = null;
+            }
+
+            if ($urlImagen) {
+                $this->deleteImage($urlImagen);
+            }
+
+            $perfil->fecha_modificacion = now();
+            $perfil->save();
+
+            DB::commit();
+
+            return [
+                'status' => true,
+                'message' => 'Imagen eliminada correctamente'
+            ];
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            return [
+                'status' => false,
+                'message' => 'Error al eliminar imagen',
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Funcion para actualizar imagen de perfil o banner
+     *
+     */
+
+        function updateProfileBannerImage(int $usuarioId, $file, string $tipo)
+    {
+        DB::beginTransaction();
+
+        try {
+            $perfil = Perfil::where('usuario_id', $usuarioId)->first();
+
+            if (!$perfil) {
+                throw new \Exception('Perfil no encontrado');
+            }
+
+            if (!in_array($tipo, ['profile', 'banner'])) {
+                throw new \Exception('Tipo inválido');
+            }
+
+            $urlAnterior = null;
+
+            if ($tipo === 'profile') {
+                $urlAnterior = $perfil->foto_perfil;
+            } else {
+                $urlAnterior = $perfil->foto_fondo;
+            }
+
+            $carpeta = $tipo === 'profile' ? 'profile' : 'banner';
+            $urlNueva = $this->uploadImage($file, $carpeta);
+
+            if ($urlAnterior) {
+                try {
+                    $this->deleteImage($urlAnterior);
+                } catch (\Exception $e) {
+                    // No detenemos el proceso si falla la eliminación
+                }
+            }
+
+            if ($tipo === 'profile') {
+                $perfil->foto_perfil = $urlNueva;
+            } else {
+                $perfil->foto_fondo = $urlNueva;
+            }
+
+            $perfil->fecha_modificacion = now();
+            $perfil->save();
+
+            DB::commit();
+
+            return [
+                'status' => true,
+                'message' => 'Imagen actualizada correctamente',
+                'url' => $urlNueva
+            ];
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            return [
+                'status' => false,
+                'message' => 'Error al actualizar imagen',
+                'error' => $e->getMessage()
+            ];
+        }
     }
 }
 
