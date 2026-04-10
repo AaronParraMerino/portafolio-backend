@@ -19,7 +19,7 @@ return new class extends Migration
                 ->cascadeOnDelete();
 
             $table->string('token_hash');
-            $table->enum('estado', ['activo', 'usado', 'expirado']);
+            $table->enum('estado', ['inactivo','activo', 'usado', 'expirado']);
 
             $table->timestamp('fecha_expiracion');
             $table->timestamp('fecha_creacion')->useCurrent();

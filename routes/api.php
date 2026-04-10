@@ -4,7 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 ############# funciones de rutas para usuarios #############
 require __DIR__.'/api/auth.php';
-
+require __DIR__.'/api/recuperacion.php';
 
 ############# datos tabla usuario ##########
 require __DIR__.'/api/usuarios.php';
