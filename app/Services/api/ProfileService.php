@@ -12,13 +12,6 @@ use App\Services\BitacoraService;
 class ProfileService
 {
 
-    /**
-     * Obtiene el perfil completo de un usuario combinando datos de:
-     * - usuario
-     * - perfil
-     * - enlaces
-     * - visibilidad
-     */
     private function createPerfil(int $userId): Perfil
     {
         return Perfil::create([
@@ -26,7 +19,13 @@ class ProfileService
         ]);
     }
     
-
+    /**
+     * Obtiene el perfil completo de un usuario combinando datos de:
+     * - usuario
+     * - perfil
+     * - enlaces
+     * - visibilidad
+     */
     public function getProfile(int $userId): array
     {
         $usuario = Usuario::with(['perfil', 'visibilidades'])
@@ -48,6 +47,8 @@ class ProfileService
             'biografia' => $perfil?->biografia,
             'ciudad' => $perfil?->ciudad,
             'pais' => $perfil?->pais,
+            'foto_perfil' => $perfil?->foto_perfil,
+            'foto_fondo' => $perfil?->foto_fondo,
 
             'visibilidad' => [
                 'nombre' => true,
@@ -238,6 +239,12 @@ class ProfileService
 
         return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $nombreArchivo;
     }
+
+    /**
+     * Funcion para eliminar una imagen de Supabase Storage
+     *
+     */
+
 
         function deleteImage(string $urlImagen)
     {
