@@ -94,4 +94,35 @@ class AuthController extends Controller
             'message' => 'Sesión cerrada correctamente',
         ], 200);
     }
+
+    public function googleAuth(Request $request): JsonResponse
+{
+    $validator = Validator::make($request->all(), [
+        'id_token' => ['required', 'string'],
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'message' => 'Datos inválidos',
+            'errors'  => $validator->errors(),
+        ], 422);
+    }
+
+    $result = $this->authService->loginWithGoogle($validator->validated()['id_token']);
+
+    if ($result['status'] === 'invalid') {
+        return response()->json(['message' => 'No se pudo validar la cuenta de Google'], 401);
+    }
+
+    if ($result['status'] === 'blocked') {
+        return response()->json(['message' => 'Usuario bloqueado'], 403);
+    }
+
+    return response()->json([
+        'message'  => 'Autenticación con Google correcta',
+        'token'    => $result['token'],
+        'data'     => $result['usuario'],
+        'foto_url' => $result['foto_url'],
+    ], 200);
+}
 }

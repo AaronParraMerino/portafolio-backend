@@ -55,4 +55,11 @@ class Usuario extends Model
     {
         return $this->hasMany(Experiencia::class, 'usuario_id', 'id_usuario');
     }
+
+    public function cuentasOauth()
+    {
+    return $this->hasMany(CuentaOauth::class, 'usuario_id', 'id_usuario');
+    }
+    
+
 }
