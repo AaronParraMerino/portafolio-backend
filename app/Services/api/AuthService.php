@@ -3,6 +3,7 @@
 namespace App\Services\api;
 
 use App\Models\Usuario;
+use App\Models\Perfil;
 use Illuminate\Support\Facades\Hash;
 
 class AuthService
@@ -16,6 +17,12 @@ class AuthService
 
         $usuario = Usuario::create($data);
         $token = $usuario->createToken('auth_token')->plainTextToken;
+
+        //
+        Perfil::create([
+        'usuario_id' => $usuario->id_usuario,
+        ]);
+        //
 
         return [
             'usuario' => $usuario,

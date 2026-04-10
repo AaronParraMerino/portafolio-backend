@@ -110,6 +110,11 @@ class ProfileController
 
     public function updateImage(Request $request, $usuarioId)
     {
+    /*dd([
+        'all' => $request->all(),
+        'files' => $request->allFiles(),
+        'file' => $request->file('file'),
+    ]);*/
         $request->validate([
             'tipo' => 'required|in:profile,banner',
             'file' => 'required|file|image|mimes:jpg,jpeg,png,webp|max:5120'

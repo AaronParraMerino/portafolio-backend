@@ -26,7 +26,7 @@ return new class extends Migration
             $table->string('foto_fondo')->nullable();
 
             $table->boolean('es_publico')->default(true);
-            $table->timestamp('fecha_modificacion')->nullable();
+            $table->timestamps();
             $table->unique('usuario_id');
         });
     }

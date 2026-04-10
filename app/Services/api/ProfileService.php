@@ -7,6 +7,7 @@ use App\Models\Usuario;
 use App\Models\Perfil;
 use App\Models\VisibilidadCampo;
 use Illuminate\Support\Str;
+use App\Services\BitacoraService;
 
 class ProfileService
 {
@@ -18,12 +19,20 @@ class ProfileService
      * - enlaces
      * - visibilidad
      */
+    private function createPerfil(int $userId): Perfil
+    {
+        return Perfil::create([
+            'usuario_id' => $userId,
+        ]);
+    }
+    
+
     public function getProfile(int $userId): array
     {
         $usuario = Usuario::with(['perfil', 'visibilidades'])
             ->findOrFail($userId);
 
-        $perfil = $usuario->perfil;
+        $perfil = $usuario->perfil ?? $this->createPerfil($userId);
 
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
@@ -55,7 +64,7 @@ class ProfileService
      * Actualiza parcialmente los datos de la tabla `usuarios`
      */
     
-    private function updateUsuarios(int $userId, array $data): void
+    private function updateUsuario(int $userId, array $data): void
     {
         if (empty($data)) return;
 
@@ -80,24 +89,7 @@ class ProfileService
                 ]
             );
         }
-        /**
-         * Crea un nuevo perfil para el usuario
-         * - Inserta todos los campos recibidos
-         * - Marca automáticamente como visibles todos los campos creados
-         */
-        private function crearPerfil(int $userId, array $data): void
-        {
-            // Crear perfil
-            Perfil::create([
-                'usuario_id' => $userId,
-                ...$data
-            ]);
 
-            // Marcar visibilidad de cada campo recibido
-            foreach ($data as $campo => $_) {
-                $this->visibility($userId, $campo);
-            }
-        }
 
         /**
          * Actualiza un perfil existente.
@@ -106,9 +98,15 @@ class ProfileService
          *   se activa automáticamente su visibilidad
          */
 
-        private function updatePerfilExistente(int $userId, $perfil, array $data): void
+        private function updatePerfil(int $userId, array $data): void
         {
             $updates = [];
+
+            $perfil = Perfil::where('usuario_id', $userId)->first();
+
+            if (!$perfil) {
+                $perfil = $this->createPerfil($userId);
+            }
 
             foreach ($data as $campo => $nuevoValor) {
 
@@ -131,27 +129,6 @@ class ProfileService
             }
         }
 
-    /**
-     * Hace la actualización de la tabla perfiles
-     * - Si el perfil existe hace actualización incrementa
-     * - Si no existe crea el perfil
-     */
-
-    private function updatePerfiles(int $userId, array $data): void
-    {
-        if (empty($data)) return;
-
-        DB::transaction(function () use ($userId, $data) {
-
-            $perfil = Perfil::where('usuario_id', $userId)->first();
-
-            if ($perfil) {
-                $this->updatePerfilExistente($userId, $perfil, $data);
-            } else {
-                $this->crearPerfil($userId, $data);
-            }
-        });
-    }
 
     /**
      * Actualiza el perfil completo del usuario
@@ -162,27 +139,27 @@ class ProfileService
 
     public function updateProfile(int $userId, array $data): array
     {
-        $usuarios = [];
-        $perfiles = [];
+        $datausuario = [];
+        $dataperfil = [];
 
         foreach ($data as $campo => $valor) {
             if (in_array($campo, ['correo', 'telefono','nombre','apellido'])) {
-                $usuarios[$campo] = $valor;
+                $datausuario[$campo] = $valor;
             }
 
             if (in_array($campo, ['biografia', 'ciudad', 'pais','profesion'])) {
-                $perfiles[$campo] = $valor;
+                $dataperfil[$campo] = $valor;
             }
         }
 
-        DB::transaction(function () use ($userId, $usuarios, $perfiles) {
+        DB::transaction(function () use ($userId, $datausuario, $dataperfil) {
 
-            if (!empty($usuarios)) {
-                $this->updateUsuarios($userId, $usuarios);
+            if (!empty($datausuario)) {
+                $this->updateUsuario($userId, $datausuario);
             }
 
-            if (!empty($perfiles)) {
-                $this->updatePerfiles($userId, $perfiles);
+            if (!empty($dataperfil)) {
+                $this->updatePerfil($userId, $dataperfil);
             }
         });
 
@@ -322,7 +299,6 @@ class ProfileService
                 $perfil->foto_fondo = $urlImagen;
             }
 
-            $perfil->fecha_modificacion = now();
             $perfil->save();
 
             DB::commit();
@@ -376,7 +352,6 @@ class ProfileService
                 $this->deleteImage($urlImagen);
             }
 
-            $perfil->fecha_modificacion = now();
             $perfil->save();
 
             DB::commit();
@@ -442,7 +417,6 @@ class ProfileService
                 $perfil->foto_fondo = $urlNueva;
             }
 
-            $perfil->fecha_modificacion = now();
             $perfil->save();
 
             DB::commit();

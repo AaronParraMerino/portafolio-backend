@@ -11,7 +11,6 @@ class Perfil extends Model
 
     protected $primaryKey = 'id_perfil';
 
-    public $timestamps = false;
 
     protected $fillable = [
         'usuario_id',
@@ -22,12 +21,10 @@ class Perfil extends Model
         'foto_perfil',
         'foto_fondo',
         'es_publico',
-        'fecha_modificacion',
     ];
 
     protected $casts = [
         'es_publico' => 'boolean',
-        'fecha_modificacion' => 'datetime',
     ];
 
     public function usuario()
