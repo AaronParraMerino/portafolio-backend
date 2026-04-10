@@ -3,9 +3,9 @@
 namespace App\Services\api;
 
 use App\Models\Usuario;
+use App\Models\Perfil;
 use Illuminate\Support\Facades\Hash;
 use App\Models\CuentaOauth;
-use App\Models\Perfil;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -20,6 +20,12 @@ class AuthService
 
         $usuario = Usuario::create($data);
         $token = $usuario->createToken('auth_token')->plainTextToken;
+
+        //
+        Perfil::create([
+        'usuario_id' => $usuario->id_usuario,
+        ]);
+        //
 
         return [
             'usuario' => $usuario,
@@ -117,7 +123,6 @@ class AuthService
             Perfil::create([
                 'usuario_id'         => $usuario->id_usuario,
                 'foto_perfil'        => $fotoUrl,
-                'fecha_modificacion' => now(),
             ]);
 
             CuentaOauth::create([

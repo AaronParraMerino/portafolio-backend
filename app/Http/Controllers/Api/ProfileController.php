@@ -34,6 +34,12 @@ class ProfileController
      */
     public function update(Request $request, int $userId)
     {
+        $user = auth()->user();
+
+        if ($user->id_usuario != $userId) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
         $data = $request->only([
             'correo',
             'nombre',
@@ -59,10 +65,92 @@ class ProfileController
 
     public function updateVisibility(Request $request, int $userId)
     {
+        $user = auth()->user();
+
+        if ($user->id_usuario != $userId) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
         $data = $request->all();
 
         return response()->json(
             $this->service->updateVisibility($userId, $data)
         );
+    }
+
+    /**
+     * Controller para manejar la subida de imágenes de perfil y banner.
+     */
+
+    public function uploadImage(Request $request, int $userId)
+    {
+        $user = auth()->user();
+
+        if ($user->id_usuario != $userId) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $request->validate([
+            'tipo' => 'required|in:profile,banner',
+            'file' => 'required|file|image|mimes:jpg,jpeg,png,webp|max:5120'
+        ]);
+
+        $response = $this->service->addImageProfileBanner(
+            $userId,
+            $request->file('file'),
+            $request->tipo
+        );
+
+        return response()->json($response, $response['status'] ? 200 : 400);
+    }
+
+    /**
+     * Controller para manejar la eliminación de imágenes de perfil y banner.
+     */
+
+    public function deleteImage(Request $request, int $userId)
+    {
+        $user = auth()->user();
+
+        if ($user->id_usuario != $userId) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $request->validate([
+            'tipo' => 'required|in:profile,banner'
+        ]);
+
+        $response = $this->service->deleteProfileBannerImage(
+            $userId,
+            $request->tipo
+        );
+
+        return response()->json($response, $response['status'] ? 200 : 400);
+    }
+
+    /**
+     * Controller para manejar la actualización de imágenes de perfil y banner.
+     */
+
+    public function updateImage(Request $request, int $userId)
+    {
+        $user = auth()->user();
+
+        if ($user->id_usuario != $userId) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $request->validate([
+            'tipo' => 'required|in:profile,banner',
+            'file' => 'required|file|image|mimes:jpg,jpeg,png,webp|max:5120'
+        ]);
+
+        $response = $this->service->updateProfileBannerImage(
+            $userId,
+            $request->file('file'),
+            $request->tipo
+        );
+
+        return response()->json($response, $response['status'] ? 200 : 400);
     }
 }
