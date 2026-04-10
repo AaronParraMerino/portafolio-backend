@@ -14,10 +14,10 @@ Route::prefix('profile')->middleware('auth:sanctum')->group(function () {
     Route::patch('{userId}/visibility', [ProfileController::class, 'updateVisibility']);
 
     
-    Route::post('{usuarioId}/image', [ProfileController::class, 'uploadImage']);
+    Route::post('{userId}/image', [ProfileController::class, 'uploadImage']);
 
-    Route::post('{usuarioId}/image/update', [ProfileController::class, 'updateImage']);
+    Route::post('{userId}/image/update', [ProfileController::class, 'updateImage']);
 
-    Route::delete('{usuarioId}/image/delete', [ProfileController::class, 'deleteImage']);
+    Route::delete('{userId}/image/delete', [ProfileController::class, 'deleteImage']);
 
 });

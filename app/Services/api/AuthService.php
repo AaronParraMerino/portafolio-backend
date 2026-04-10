@@ -6,7 +6,6 @@ use App\Models\Usuario;
 use App\Models\Perfil;
 use Illuminate\Support\Facades\Hash;
 use App\Models\CuentaOauth;
-use App\Models\Perfil;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -124,7 +123,6 @@ class AuthService
             Perfil::create([
                 'usuario_id'         => $usuario->id_usuario,
                 'foto_perfil'        => $fotoUrl,
-                'fecha_modificacion' => now(),
             ]);
 
             CuentaOauth::create([

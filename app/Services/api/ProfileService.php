@@ -281,12 +281,12 @@ class ProfileService
      * Funcion para agregar imagen de perfil o banner
      *
      */
-    function addImageProfileBanner(int $usuarioId, $file, string $tipo)
+    function addImageProfileBanner(int $userId, $file, string $tipo)
     {
         DB::beginTransaction();
 
         try {
-            $perfil = Perfil::where('usuario_id', $usuarioId)->first();
+            $perfil = Perfil::where('usuario_id', $userId)->first();
 
             if (!$perfil) {
                 throw new \Exception('Perfil no encontrado');
@@ -330,12 +330,12 @@ class ProfileService
     /**
      * Funcion para eliminar imagen (perfil o banner)
      */
-    function deleteProfileBannerImage(int $usuarioId, string $tipo)
+    function deleteProfileBannerImage(int $userId, string $tipo)
     {
         DB::beginTransaction();
 
         try {
-            $perfil = Perfil::where('usuario_id', $usuarioId)->first();
+            $perfil = Perfil::where('usuario_id', $userId)->first();
 
             if (!$perfil) {
                 throw new \Exception('Perfil no encontrado');
@@ -384,12 +384,12 @@ class ProfileService
      *
      */
 
-        function updateProfileBannerImage(int $usuarioId, $file, string $tipo)
+        function updateProfileBannerImage(int $userId, $file, string $tipo)
     {
         DB::beginTransaction();
 
         try {
-            $perfil = Perfil::where('usuario_id', $usuarioId)->first();
+            $perfil = Perfil::where('usuario_id', $userId)->first();
 
             if (!$perfil) {
                 throw new \Exception('Perfil no encontrado');
