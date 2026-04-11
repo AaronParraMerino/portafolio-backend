@@ -5,16 +5,18 @@
   },
   "routes": [
     {
-      "src": "/api/auth/login",
-      "methods": ["OPTIONS"],
-      "status": 204,
+      "src": "/api/(.*)",
+      "dest": "/api/index.php",
       "headers": {
         "Access-Control-Allow-Origin": "https://creafolio-zeta.vercel.app",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
         "Access-Control-Allow-Credentials": "true"
       }
     },
-    { "src": "/(.*)", "dest": "/api/index.php" }
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.php"
+    }
   ]
 }
