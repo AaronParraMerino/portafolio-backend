@@ -2,17 +2,18 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
 ############# funciones de rutas para usuarios #############
-require __DIR__.'/api/auth.php';
-require __DIR__.'/api/recuperacion.php';
+// base_path garantiza que encuentre la carpeta desde la raíz del proyecto
+require base_path('routes/api/auth.php');
+require base_path('routes/api/recuperacion.php');
 
 ############# datos tabla usuario ##########
-require __DIR__.'/api/usuarios.php';
-require __DIR__.'/api/profile.php';
-require __DIR__.'/api/experiencias.php';
+require base_path('routes/api/usuarios.php');
+require base_path('routes/api/profile.php');
+require base_path('routes/api/experiencias.php');
 
 #############################################
-// Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
     return response()->json([
         'status' => 'ok',
@@ -20,7 +21,6 @@ Route::get('/ping', function () {
         'timestamp' => now(),
     ]);
 });
-
 
 // Ejemplo de ruta real
 Route::get('/cotizaciones', function () {
