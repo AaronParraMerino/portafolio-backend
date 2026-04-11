@@ -2,10 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 
-class Usuario extends Model
+class Usuario extends Authenticatable
 {
     use HasApiTokens;
 
@@ -58,8 +58,6 @@ class Usuario extends Model
 
     public function cuentasOauth()
     {
-    return $this->hasMany(CuentaOauth::class, 'usuario_id', 'id_usuario');
+        return $this->hasMany(CuentaOauth::class, 'usuario_id', 'id_usuario');
     }
-    
-
 }
