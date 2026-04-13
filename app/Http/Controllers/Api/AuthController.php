@@ -4,13 +4,17 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\api\AuthService;
+use App\Services\api\SeccionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
-    public function __construct(private readonly AuthService $authService)
+    public function __construct(
+        private readonly AuthService $authService,
+        private readonly SeccionService $seccionService,
+    )
     {
     }
 
@@ -46,6 +50,7 @@ class AuthController extends Controller
         $validator = Validator::make($request->all(), [
             'correo' => ['required', 'email'],
             'password' => ['required', 'string'],
+            'session_token' => ['nullable', 'string', 'size:64'],
         ]);
 
         if ($validator->fails()) {
@@ -71,6 +76,16 @@ class AuthController extends Controller
             ], 403);
         }
         
+        $sessionToken = $data['session_token'] ?? $request->cookie('foliToken');
+
+        if ($sessionToken && isset($result['personal_access_token_id'])) {
+            $this->seccionService->linkAuthBySessionToken(
+                $sessionToken,
+                $result['usuario']->id_usuario,
+                (int) $result['personal_access_token_id']
+            );
+        }
+
         return response()->json([
             'message' => 'Inicio de sesión correcto',
             'token' => $result['token'],
@@ -99,6 +114,7 @@ class AuthController extends Controller
 {
     $validator = Validator::make($request->all(), [
         'id_token' => ['required', 'string'],
+        'session_token' => ['nullable', 'string', 'size:64'],
     ]);
 
     if ($validator->fails()) {
@@ -108,7 +124,8 @@ class AuthController extends Controller
         ], 422);
     }
 
-    $result = $this->authService->loginWithGoogle($validator->validated()['id_token']);
+    $data = $validator->validated();
+    $result = $this->authService->loginWithGoogle($data['id_token']);
 
     if ($result['status'] === 'invalid') {
         return response()->json(['message' => 'No se pudo validar la cuenta de Google'], 401);
@@ -116,6 +133,16 @@ class AuthController extends Controller
 
     if ($result['status'] === 'blocked') {
         return response()->json(['message' => 'Usuario bloqueado'], 403);
+    }
+
+    $sessionToken = $data['session_token'] ?? $request->cookie('foliToken');
+
+    if ($sessionToken && isset($result['personal_access_token_id'])) {
+        $this->seccionService->linkAuthBySessionToken(
+            $sessionToken,
+            $result['usuario']->id_usuario,
+            (int) $result['personal_access_token_id']
+        );
     }
 
     return response()->json([

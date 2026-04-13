@@ -2,6 +2,8 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
+require __DIR__.'/api/seccion.php';
 ############# funciones de rutas para usuarios #############
 require __DIR__.'/api/auth.php';
 require __DIR__.'/api/recuperacion.php';
