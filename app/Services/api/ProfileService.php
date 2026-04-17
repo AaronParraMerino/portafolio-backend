@@ -11,14 +11,7 @@ use App\Services\BitacoraService;
 
 class ProfileService
 {
-
-    private function createPerfil(int $userId): Perfil
-    {
-        return Perfil::create([
-            'usuario_id' => $userId,
-        ]);
-    }
-    
+ 
     /**
      * Obtiene el perfil completo de un usuario combinando datos de:
      * - usuario
@@ -26,12 +19,13 @@ class ProfileService
      * - enlaces
      * - visibilidad
      */
+
     public function getProfile(int $userId): array
     {
         $usuario = Usuario::with(['perfil', 'visibilidades'])
             ->findOrFail($userId);
 
-        $perfil = $usuario->perfil ?? $this->createPerfil($userId);
+        $perfil = $usuario->perfil;
 
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
@@ -57,9 +51,11 @@ class ProfileService
                 'biografia' => $visibilidadRaw['biografia'] ?? false,
                 'pais' => $visibilidadRaw['pais'] ?? false,
                 'ciudad' => $visibilidadRaw['ciudad'] ?? false,
+                'profesion' => $visibilidadRaw['profesion'] ?? false,
             ],
         ];
     }
+
 
     /**
      * Actualiza parcialmente los datos de la tabla `usuarios`
@@ -98,6 +94,13 @@ class ProfileService
          * - Si un campo pasa de vacío/null a tener valor
          *   se activa automáticamente su visibilidad
          */
+
+        private function createPerfil(int $userId): Perfil
+    {
+        return Perfil::create([
+            'usuario_id' => $userId,
+        ]);
+    }
 
         private function updatePerfil(int $userId, array $data): void
         {
