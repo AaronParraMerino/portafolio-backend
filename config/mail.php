@@ -83,6 +83,9 @@ return [
             'transport' => 'failover',
             'mailers' => [
                 'smtp',
+                #########
+                'resend',
+                ##########
                 'log',
             ],
         ],
