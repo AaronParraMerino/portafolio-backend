@@ -3,6 +3,7 @@
 namespace App\Services\api;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use App\Models\Usuario;
 use App\Models\Perfil;
 use App\Models\VisibilidadCampo;
@@ -11,7 +12,14 @@ use App\Services\BitacoraService;
 
 class ProfileService
 {
- 
+
+    private function createPerfil(int $userId): Perfil
+    {
+        return Perfil::create([
+            'usuario_id' => $userId,
+        ]);
+    }
+
     /**
      * Obtiene el perfil completo de un usuario combinando datos de:
      * - usuario
@@ -19,18 +27,17 @@ class ProfileService
      * - enlaces
      * - visibilidad
      */
-
     public function getProfile(int $userId): array
     {
         $usuario = Usuario::with(['perfil', 'visibilidades'])
             ->findOrFail($userId);
 
-        $perfil = $usuario->perfil;
+        $perfil = $usuario->perfil ?? $this->createPerfil($userId);
 
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
             ->toArray();
-        
+
         return [
             'id' => $usuario->id_usuario,
             'nombre' => $usuario->nombre,
@@ -51,118 +58,106 @@ class ProfileService
                 'biografia' => $visibilidadRaw['biografia'] ?? false,
                 'pais' => $visibilidadRaw['pais'] ?? false,
                 'ciudad' => $visibilidadRaw['ciudad'] ?? false,
-                'profesion' => $visibilidadRaw['profesion'] ?? false,
             ],
         ];
     }
 
-
     /**
      * Actualiza parcialmente los datos de la tabla `usuarios`
      */
-    
     private function updateUsuario(int $userId, array $data): void
     {
-        if (empty($data)) return;
+        if (empty($data)) {
+            return;
+        }
 
         $usuario = Usuario::findOrFail($userId);
 
         $usuario->update($data);
     }
-        /**
+
+    /**
      * Inserta la visibilidad de un campo específico (para datos nuevos)
      * Siempre establece el campo como visible = true
      */
-
-        private function visibility(int $userId, string $campo): void
-        {
-            VisibilidadCampo::firstOrCreate(
-                [
-                    'usuario_id' => $userId,
-                    'campo' => $campo,
-                ],
-                [
-                    'visible' => DB::raw('true')
-                ]
-            );
-        }
-
-
-        /**
-         * Actualiza un perfil existente.
-         * - Solo actualiza campos cuyo valor haya cambiado
-         * - Si un campo pasa de vacío/null a tener valor
-         *   se activa automáticamente su visibilidad
-         */
-
-        private function createPerfil(int $userId): Perfil
+    private function visibility(int $userId, string $campo): void
     {
-        return Perfil::create([
-            'usuario_id' => $userId,
-        ]);
+        VisibilidadCampo::firstOrCreate(
+            [
+                'usuario_id' => $userId,
+                'campo' => $campo,
+            ],
+            [
+                'visible' => DB::raw('true')
+            ]
+        );
     }
 
-        private function updatePerfil(int $userId, array $data): void
-        {
-            $updates = [];
+    /**
+     * Actualiza un perfil existente.
+     * - Solo actualiza campos cuyo valor haya cambiado
+     * - Si un campo pasa de vacío/null a tener valor
+     *   se activa automáticamente su visibilidad
+     */
+    private function updatePerfil(int $userId, array $data): void
+    {
+        $updates = [];
 
-            $perfil = Perfil::where('usuario_id', $userId)->first();
+        $perfil = Perfil::where('usuario_id', $userId)->first();
 
-            if (!$perfil) {
-                $perfil = $this->createPerfil($userId);
-            }
+        if (! $perfil) {
+            $perfil = $this->createPerfil($userId);
+        }
 
-            foreach ($data as $campo => $nuevoValor) {
+        foreach ($data as $campo => $nuevoValor) {
 
-                $valorActual = $perfil->$campo ?? null;
+            $valorActual = $perfil->$campo ?? null;
 
-                // Solo actualizar si el valor cambió
-                if ($valorActual !== $nuevoValor) {
+            // Solo actualizar si el valor cambió
+            if ($valorActual !== $nuevoValor) {
 
-                    // Si antes estaba vacío y ahora tiene valor → visibilidad
-                    if ((is_null($valorActual) || $valorActual === '') && $nuevoValor !== null && $nuevoValor !== '') {
-                        $this->visibility($userId, $campo);
-                    }
-
-                    $updates[$campo] = $nuevoValor;
+                // Si antes estaba vacío y ahora tiene valor -> visibilidad
+                if ((is_null($valorActual) || $valorActual === '') && $nuevoValor !== null && $nuevoValor !== '') {
+                    $this->visibility($userId, $campo);
                 }
-            }
 
-            if (!empty($updates)) {
-                $perfil->update($updates);
+                $updates[$campo] = $nuevoValor;
             }
         }
 
+        if (! empty($updates)) {
+            $perfil->update($updates);
+        }
+    }
 
     /**
      * Actualiza el perfil completo del usuario
-     * - Separa los campos según su tabla destino (`usuarios` p `perfiles`)
+     * - Separa los campos según su tabla destino (`usuarios` y `perfiles`)
      * - Ejecuta ambas actualizaciones dentro de una transacción
      * - Retorna el perfil actualizado consolidado
      */
-
     public function updateProfile(int $userId, array $data): array
     {
         $datausuario = [];
         $dataperfil = [];
 
         foreach ($data as $campo => $valor) {
-            if (in_array($campo, ['correo', 'telefono','nombre','apellido'])) {
+            if (in_array($campo, ['correo', 'telefono', 'nombre', 'apellido'])) {
                 $datausuario[$campo] = $valor;
             }
 
-            if (in_array($campo, ['biografia', 'ciudad', 'pais','profesion'])) {
+            if (in_array($campo, ['biografia', 'ciudad', 'pais', 'profesion'])) {
                 $dataperfil[$campo] = $valor;
             }
         }
 
         DB::transaction(function () use ($userId, $datausuario, $dataperfil) {
 
-            if (!empty($datausuario)) {
+            if (! empty($datausuario)) {
                 $this->updateUsuario($userId, $datausuario);
             }
 
-            if (!empty($dataperfil)) {
+            if (! empty($dataperfil)) {
                 $this->updatePerfil($userId, $dataperfil);
             }
         });
@@ -170,12 +165,10 @@ class ProfileService
         return $this->getProfile($userId);
     }
 
-    
     /**
      * Actualiza múltiples campos de visibilidad de un usuario
      * Ejemplo: ['correo' => true, 'telefono' => false]
      */
-
     public function updateVisibility(int $userId, array $data): array
     {
         $rows = [];
@@ -200,17 +193,42 @@ class ProfileService
     }
 
     /**
-     * Seccion crud de imagenes de perfil---------------------------
-     *
+     * Seccion CRUD de imagenes de perfil/bannner
      */
+
+    private function imageDriver(): string
+    {
+        return env('IMAGE_STORAGE_DRIVER', 'supabase');
+    }
+
+    private function imageDisk(): string
+    {
+        return env('IMAGE_STORAGE_DISK', 'public');
+    }
+
+    private function localPrefixForType(string $carpeta): string
+    {
+        return trim(env('IMAGE_LOCAL_PREFIX', 'imagenes'), '/').'/'.trim($carpeta, '/');
+    }
 
     /**
-     * Funcion para subir una imagen a Supabase Storage
-     *
+     * Funcion para subir una imagen
+     * - local: Laravel Storage (disk public)
+     * - supabase: API Storage via cURL
      */
-
-        function uploadImage($file, string $carpeta)
+    function uploadImage($file, string $carpeta)
     {
+        if ($this->imageDriver() === 'local') {
+            $prefix = $this->localPrefixForType($carpeta);
+            $path = Storage::disk($this->imageDisk())->put($prefix, $file);
+            if (! $path) {
+                throw new \Exception('No se pudo guardar la imagen en almacenamiento local');
+            }
+
+            // Compatible con frontend actual que ya soporta rutas relativas
+            return $path;
+        }
+
         $bucket = env('SUPABASE_BUCKET');
         $urlBase = env('SUPABASE_URL');
         $key = env('SUPABASE_KEY');
@@ -244,13 +262,31 @@ class ProfileService
     }
 
     /**
-     * Funcion para eliminar una imagen de Supabase Storage
-     *
+     * Funcion para eliminar una imagen
+     * - local: Laravel Storage (disk public)
+     * - supabase: API Storage via cURL
      */
-
-
-        function deleteImage(string $urlImagen)
+    function deleteImage(string $urlImagen)
     {
+        if ($this->imageDriver() === 'local') {
+            $prefix = trim(env('IMAGE_LOCAL_PREFIX', 'imagenes'), '/').'/';
+            $path = $urlImagen;
+
+            // Acepta URL absoluta local o ruta relativa
+            if (str_starts_with($urlImagen, 'http://') || str_starts_with($urlImagen, 'https://')) {
+                $publicBase = rtrim(env('APP_URL'), '/').'/storage/';
+                $path = str_replace($publicBase, '', $urlImagen);
+            }
+
+            if (! str_starts_with($path, $prefix)) {
+                // Evita borrar rutas fuera del prefijo esperado
+                return true;
+            }
+
+            Storage::disk($this->imageDisk())->delete($path);
+            return true;
+        }
+
         $bucket = env('SUPABASE_BUCKET');
         $urlBase = env('SUPABASE_URL');
         $key = env('SUPABASE_KEY');
@@ -282,7 +318,6 @@ class ProfileService
 
     /**
      * Funcion para agregar imagen de perfil o banner
-     *
      */
     function addImageProfileBanner(int $userId, $file, string $tipo)
     {
@@ -291,11 +326,11 @@ class ProfileService
         try {
             $perfil = Perfil::where('usuario_id', $userId)->first();
 
-            if (!$perfil) {
+            if (! $perfil) {
                 throw new \Exception('Perfil no encontrado');
             }
 
-            if (!in_array($tipo, ['profile', 'banner'])) {
+            if (! in_array($tipo, ['profile', 'banner'])) {
                 throw new \Exception('Tipo inválido');
             }
 
@@ -340,11 +375,11 @@ class ProfileService
         try {
             $perfil = Perfil::where('usuario_id', $userId)->first();
 
-            if (!$perfil) {
+            if (! $perfil) {
                 throw new \Exception('Perfil no encontrado');
             }
 
-            if (!in_array($tipo, ['profile', 'banner'])) {
+            if (! in_array($tipo, ['profile', 'banner'])) {
                 throw new \Exception('Tipo inválido');
             }
 
@@ -384,21 +419,19 @@ class ProfileService
 
     /**
      * Funcion para actualizar imagen de perfil o banner
-     *
      */
-
-        function updateProfileBannerImage(int $userId, $file, string $tipo)
+    function updateProfileBannerImage(int $userId, $file, string $tipo)
     {
         DB::beginTransaction();
 
         try {
             $perfil = Perfil::where('usuario_id', $userId)->first();
 
-            if (!$perfil) {
+            if (! $perfil) {
                 throw new \Exception('Perfil no encontrado');
             }
 
-            if (!in_array($tipo, ['profile', 'banner'])) {
+            if (! in_array($tipo, ['profile', 'banner'])) {
                 throw new \Exception('Tipo inválido');
             }
 
@@ -448,8 +481,3 @@ class ProfileService
         }
     }
 }
-
-
-
-
-

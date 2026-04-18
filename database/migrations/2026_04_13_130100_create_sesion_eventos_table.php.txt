@@ -1,0 +1,35 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('sesion_eventos', function (Blueprint $table) {
+            $table->id();
+
+            $table->unsignedInteger('id_rastreo_base');
+            $table->foreign('id_rastreo_base')
+                ->references('id_rastreo_interno')
+                ->on('sesion_base')
+                ->onDelete('cascade');
+
+            // Ej: click, scroll_depth, time_on_product, hover
+            $table->string('tipo_evento', 50);
+            $table->string('objetivo')->nullable();
+            $table->integer('valor_metrica')->nullable();
+            $table->json('detalles_extra')->nullable();
+            $table->timestamp('creado_al')->useCurrent();
+
+            $table->index(['id_rastreo_base', 'tipo_evento']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('sesion_eventos');
+    }
+};

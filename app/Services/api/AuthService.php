@@ -49,10 +49,13 @@ class AuthService
             ];
         }
 
+        $newToken = $usuario->createToken('auth_token');
+
         return [
             'status' => 'success',
             'usuario' => $usuario,
-            'token' => $usuario->createToken('auth_token')->plainTextToken,
+            'token' => $newToken->plainTextToken,
+            'personal_access_token_id' => $newToken->accessToken->id,
         ];
     }
 
@@ -83,7 +86,7 @@ class AuthService
     }
 
     $nombre  = $payload['name'] ?? null;
-    $fotoUrl = $payload['picture'] ?? null;
+    $fotoUrl = $this->uploadGoogleImageToSupabase($payload['picture'] ?? null);
 
     // ¿Ya existe la cuenta OAuth vinculada?
     $cuenta = CuentaOauth::where('provider', 'google')
@@ -140,9 +143,12 @@ class AuthService
         return ['status' => 'blocked'];
     }
 
+    $newToken = $usuario->createToken('auth_token');
+
     return [
         'status'   => 'success',
-        'token'    => $usuario->createToken('auth_token')->plainTextToken,
+        'token'    => $newToken->plainTextToken,
+        'personal_access_token_id' => $newToken->accessToken->id,
         'usuario'  => $usuario,
         'foto_url' => $fotoUrl,
     ];
@@ -155,5 +161,62 @@ private function splitGoogleName(?string $name): array
     }
     $parts = preg_split('/\s+/', trim($name), 2);
     return [$parts[0], $parts[1] ?? 'Google'];
+}
+
+private function uploadGoogleImageToSupabase(?string $imageUrl): ?string
+{
+    if (! $imageUrl) {
+        return null;
+    }
+
+    $bucket = env('SUPABASE_BUCKET');
+    $urlBase = env('SUPABASE_URL');
+    $key = env('SUPABASE_KEY');
+
+    if (! $bucket || ! $urlBase || ! $key) {
+        return $imageUrl;
+    }
+
+    try {
+        $imageResponse = Http::timeout(10)->get($imageUrl);
+        if (! $imageResponse->ok()) {
+            return $imageUrl;
+        }
+
+        $contentType = $imageResponse->header('Content-Type') ?: 'image/jpeg';
+        $extension = 'jpg';
+        if (str_contains($contentType, '/')) {
+            $extension = explode('/', $contentType)[1] ?: 'jpg';
+            $extension = strtolower(explode(';', $extension)[0]);
+        }
+
+        $nombreArchivo = 'profile/' . Str::uuid() . '.' . $extension;
+        $fileContent = $imageResponse->body();
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $nombreArchivo,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $fileContent,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'Content-Type: ' . $contentType,
+            ],
+        ]);
+
+        curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            return $imageUrl;
+        }
+
+        return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $nombreArchivo;
+    } catch (\Throwable $e) {
+        return $imageUrl;
+    }
 }
 }

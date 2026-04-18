@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\TokenRecuperacion;
 use App\Models\Usuario;
+use App\Services\api\SeccionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
@@ -14,10 +15,15 @@ use Illuminate\Support\Facades\Validator;
 
 class RecuperacionController extends Controller
 {
+    public function __construct(private readonly SeccionService $seccionService)
+    {
+    }
+
     public function solicitar(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'correo' => ['required', 'email', 'exists:usuarios,correo'],
+            'session_token' => ['nullable', 'string', 'size:64'],
         ], [
             'correo.exists' => 'Datos invalidos', // Mensaje genérico
         ]);
@@ -39,13 +45,22 @@ class RecuperacionController extends Controller
 
             $codigoPlano = strtoupper(Str::random(6));
 
-            TokenRecuperacion::create([
+            $tokenRecuperacion = TokenRecuperacion::create([
                 'usuario_id' => $usuario->id_usuario,
                 'token_hash' => Hash::make($codigoPlano),
                 'estado' => 'inactivo',
                 'fecha_expiracion' => Carbon::now()->addMinutes(2),
                 'fecha_creacion' => Carbon::now(),
             ]);
+
+            $sessionToken = $validator->validated()['session_token'] ?? $request->cookie('foliToken');
+            if ($sessionToken) {
+                $this->seccionService->linkRecoveryBySessionToken(
+                    $sessionToken,
+                    $tokenRecuperacion->id_tokenR,
+                    $usuario->id_usuario
+                );
+            }
 
             Mail::raw(
                 "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 2 minutos.",
@@ -65,6 +80,7 @@ class RecuperacionController extends Controller
         $validator = Validator::make($request->all(), [
             'correo' => ['required', 'email'],
             'codigo' => ['required', 'string', 'size:6'],
+            'session_token' => ['nullable', 'string', 'size:64'],
         ]);
 
         if ($validator->fails()) {
@@ -103,6 +119,15 @@ class RecuperacionController extends Controller
         $tokenValido->estado = 'activo';
         $tokenValido->save();
 
+        $sessionToken = $validator->validated()['session_token'] ?? $request->cookie('foliToken');
+        if ($sessionToken) {
+            $this->seccionService->linkRecoveryBySessionToken(
+                $sessionToken,
+                $tokenValido->id_tokenR,
+                $usuario->id_usuario
+            );
+        }
+
         return response()->json(['message' => 'Codigo validado correctamente.'], 200);
     }
 
@@ -112,6 +137,7 @@ class RecuperacionController extends Controller
             'correo' => ['required', 'email'],
             'codigo' => ['required', 'string', 'size:6'],
             'password' => ['required', 'string', 'min:6', 'confirmed'],
+            'session_token' => ['nullable', 'string', 'size:64'],
         ]);
 
         if ($validator->fails()) {
@@ -153,6 +179,15 @@ class RecuperacionController extends Controller
 
         $tokenValido->estado = 'usado';
         $tokenValido->save();
+
+        $sessionToken = $validator->validated()['session_token'] ?? $request->cookie('foliToken');
+        if ($sessionToken) {
+            $this->seccionService->linkRecoveryBySessionToken(
+                $sessionToken,
+                $tokenValido->id_tokenR,
+                $usuario->id_usuario
+            );
+        }
 
         
         return response()->json(['message' => 'Contrasena actualizada correctamente.'], 200);
