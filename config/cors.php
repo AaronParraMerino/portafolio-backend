@@ -6,7 +6,7 @@ return [
 
     // Incluye ambos para evitar choque localhost vs 127.0.0.1
     'allowed_origins' => [
-        'http://localhost:3000',
+        'https://creafolio-zeta.vercel.app/',
         'http://127.0.0.1:3000',
     ],
 
