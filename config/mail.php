@@ -84,7 +84,7 @@ return [
             'mailers' => [
                 'smtp',
                 #########
-                'resend',
+                #'resend',
                 ##########
                 'log',
             ],

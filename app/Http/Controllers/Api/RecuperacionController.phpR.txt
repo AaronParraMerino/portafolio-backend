@@ -9,6 +9,7 @@ use App\Services\api\SeccionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
@@ -25,7 +26,7 @@ class RecuperacionController extends Controller
             'correo' => ['required', 'email', 'exists:usuarios,correo'],
             'session_token' => ['nullable', 'string', 'size:64'],
         ], [
-            'correo.exists' => 'Datos invalidos', // Mensaje genérico
+            'correo.exists' => 'Datos invalidos', // Mensaje genÃ©rico
         ]);
 
         if ($validator->fails()) {
@@ -62,12 +63,24 @@ class RecuperacionController extends Controller
                 );
             }
 
-            Mail::raw(
-                "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 2 minutos.",
-                function ($message) use ($correo) {
-                    $message->to($correo)->subject('Codigo de recuperacion');
-                }
-            );
+            try {
+                Mail::raw(
+                    "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 2 minutos.",
+                    function ($message) use ($correo) {
+                        $message->to($correo)->subject('Codigo de recuperacion');
+                    }
+                );
+            } catch (\Throwable $exception) {
+                Log::error('No se pudo enviar el correo de recuperacion.', [
+                    'correo' => $correo,
+                    'usuario_id' => $usuario->id_usuario,
+                    'error' => $exception->getMessage(),
+                ]);
+
+                return response()->json([
+                    'message' => 'No se pudo enviar el codigo de recuperacion. Intenta nuevamente.',
+                ], 503);
+            }
         }
 
         return response()->json([
