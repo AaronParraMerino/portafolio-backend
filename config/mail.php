@@ -52,7 +52,7 @@ return [
         'sendgrid' => [
             'transport' => 'smtp',
             'host' => env('SENDGRID_SMTP_HOST', 'smtp.sendgrid.net'),
-            'port' => env('SENDGRID_SMTP_PORT', 587),
+            'port' => env('SENDGRID_SMTP_PORT'),
             'username' => env('SENDGRID_SMTP_USERNAME', 'apikey'),
             'password' => env('SENDGRID_SMTP_PASSWORD'),
             'encryption' => env('SENDGRID_SMTP_ENCRYPTION', 'tls'),
