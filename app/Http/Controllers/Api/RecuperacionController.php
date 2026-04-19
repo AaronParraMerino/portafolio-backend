@@ -21,6 +21,7 @@ class RecuperacionController extends Controller
 
     public function solicitar(Request $request)
     {
+        set_time_limit(60);
         $validator = Validator::make($request->all(), [
             'correo' => ['required', 'email', 'exists:usuarios,correo'],
             'session_token' => ['nullable', 'string', 'size:64'],
