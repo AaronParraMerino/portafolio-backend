@@ -9,6 +9,7 @@ use App\Services\api\SeccionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
+use App\Mail\RecuperacionMail;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
@@ -62,12 +63,7 @@ class RecuperacionController extends Controller
                 );
             }
 
-            Mail::raw(
-                "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 2 minutos.",
-                function ($message) use ($correo) {
-                    $message->to($correo)->subject('Codigo de recuperacion');
-                }
-            );
+            Mail::to($correo)->queue(new RecuperacionMail($codigoPlano));
         }
 
         return response()->json([
