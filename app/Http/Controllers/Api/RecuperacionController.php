@@ -22,6 +22,8 @@ class RecuperacionController extends Controller
 
     public function solicitar(Request $request)
     {
+        set_time_limit(360);
+
         $validator = Validator::make($request->all(), [
             'correo' => ['required', 'email', 'exists:usuarios,correo'],
             'session_token' => ['nullable', 'string', 'size:64'],
@@ -50,7 +52,7 @@ class RecuperacionController extends Controller
                 'usuario_id' => $usuario->id_usuario,
                 'token_hash' => Hash::make($codigoPlano),
                 'estado' => 'inactivo',
-                'fecha_expiracion' => Carbon::now()->addMinutes(2),
+                'fecha_expiracion' => Carbon::now()->addMinutes(6),
                 'fecha_creacion' => Carbon::now(),
             ]);
 
@@ -65,7 +67,7 @@ class RecuperacionController extends Controller
 
             try {
                 Mail::raw(
-                    "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 2 minutos.",
+                    "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 6 minutos.",
                     function ($message) use ($correo) {
                         $message->to($correo)->subject('Codigo de recuperacion');
                     }
