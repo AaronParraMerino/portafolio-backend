@@ -9,8 +9,8 @@ use App\Services\api\SeccionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
 
@@ -66,12 +66,7 @@ class RecuperacionController extends Controller
             }
 
             try {
-                Mail::raw(
-                    "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 6 minutos.",
-                    function ($message) use ($correo) {
-                        $message->to($correo)->subject('Codigo de recuperacion');
-                    }
-                );
+                $this->sendRecoveryCodeWithSendGridApi($correo, $codigoPlano);
             } catch (\Throwable $exception) {
                 Log::error('No se pudo enviar el correo de recuperacion.', [
                     'correo' => $correo,
@@ -206,5 +201,40 @@ class RecuperacionController extends Controller
 
         
         return response()->json(['message' => 'Contrasena actualizada correctamente.'], 200);
+    }
+
+    private function sendRecoveryCodeWithSendGridApi(string $toEmail, string $codigoPlano): void
+    {
+        $apiKey = (string) env('SENDGRID_API_KEY', '');
+        $fromEmail = (string) env('SENDGRID_FROM_ADDRESS', env('MAIL_FROM_ADDRESS', ''));
+        $fromName = (string) env('SENDGRID_FROM_NAME', env('MAIL_FROM_NAME', 'Portafolio'));
+        $apiUrl = (string) env('SENDGRID_API_URL', 'https://api.sendgrid.com/v3/mail/send');
+
+        if ($apiKey === '' || $fromEmail === '') {
+            throw new \RuntimeException('Falta SENDGRID_API_KEY o SENDGRID_FROM_ADDRESS en .env');
+        }
+
+        $response = Http::withToken($apiKey)
+            ->acceptJson()
+            ->post($apiUrl, [
+                'personalizations' => [[
+                    'to' => [[
+                        'email' => $toEmail,
+                    ]],
+                ]],
+                'from' => [
+                    'email' => $fromEmail,
+                    'name' => $fromName,
+                ],
+                'subject' => 'Codigo de recuperacion',
+                'content' => [[
+                    'type' => 'text/plain',
+                    'value' => "Tu codigo de recuperacion es: {$codigoPlano}. Expira en 6 minutos.",
+                ]],
+            ]);
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('SendGrid API error '.$response->status().': '.$response->body());
+        }
     }
 }
