@@ -60,4 +60,9 @@ class Usuario extends Authenticatable
     {
         return $this->hasMany(CuentaOauth::class, 'usuario_id', 'id_usuario');
     }
+
+    public function habilidadesUsuario()
+    {
+        return $this->hasMany(HabilidadUsuario::class, 'usuario_id', 'id_usuario');
+    }
 }

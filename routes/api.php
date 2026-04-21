@@ -11,7 +11,9 @@ require __DIR__.'/api/recuperacion.php';
 ############# datos tabla usuario ##########
 require __DIR__.'/api/usuarios.php';
 require __DIR__.'/api/profile.php';
+
 require __DIR__.'/api/experiencias.php';
+require __DIR__.'/api/habilidades.php';
 
 #############################################
 // Ruta de prueba para verificar la conexión
