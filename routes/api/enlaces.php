@@ -14,4 +14,10 @@ Route::prefix('enlaces')->group(function () {
 
     Route::delete('{userId}/{idEnlace}', [EnlaceController::class, 'destroy']);
 
+    Route::put('{userId}/{idEnlace}', [EnlaceController::class, 'update']);
+
+    Route::patch('{userId}/{idEnlace}/visibility', [EnlaceController::class, 'updateVisibility']);
+
+    Route::patch('{userId}/visibility', [EnlaceController::class, 'updateAllVisibility']);
+
 });

@@ -47,4 +47,42 @@ class EnlaceController extends Controller
             'message' => 'Enlace eliminado correctamente'
         ]);
     }
+
+    //controller para actualizar un enlace de un usuario
+    public function update(Request $request, $userId, $idEnlace)
+    {
+        $data = $request->validate([
+            'nombre' => 'sometimes|string|max:255',
+            'link' => 'sometimes|string',
+            'descripcion' => 'nullable|string',
+        ]);
+
+        return response()->json(
+            $this->service->update($userId, $idEnlace, $data)
+        );
+    }
+
+    //controller para editar la visibilidad de un enlace de un usuario
+    public function updateVisibility(Request $request, $userId, $idEnlace)
+    {
+        $data = $request->validate([
+            'es_visible' => 'required|boolean',
+        ]);
+
+        $enlace = $this->service->updateVisibility($userId, $idEnlace, $data['es_visible']);
+
+        return response()->json($enlace);
+    }
+
+    //controller para editar todas las visibilidades de los enlaces de un usuario
+    public function updateAllVisibility(Request $request, $userId)
+    {
+        $data = $request->validate([
+            'es_visible' => 'required|boolean',
+        ]);
+
+        $result = $this->service->updateAllVisibility($userId, $data['es_visible']);
+
+        return response()->json($result);
+    }
 }
