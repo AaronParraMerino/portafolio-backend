@@ -15,7 +15,9 @@ require __DIR__.'/api/profile.php';
 require __DIR__.'/api/experiencias.php';
 require __DIR__.'/api/habilidades.php';
 
-#############################################
+#############  tecnologia  #################
+require __DIR__.'/api/tecnologia.php';
+############################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
     return response()->json([
