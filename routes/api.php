@@ -14,6 +14,7 @@ require __DIR__.'/api/profile.php';
 
 require __DIR__.'/api/experiencias.php';
 require __DIR__.'/api/habilidades.php';
+require __DIR__.'/api/projects.php';
 
 #############  tecnologia  #################
 require __DIR__.'/api/tecnologia.php';
