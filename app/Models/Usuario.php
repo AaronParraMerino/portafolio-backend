@@ -66,4 +66,9 @@ class Usuario extends Authenticatable
     {
         return $this->hasMany(HabilidadUsuario::class, 'usuario_id', 'id_usuario');
     }
+
+    public function enlaces()
+    {
+        return $this->hasMany(Enlace::class, 'id_usuario', 'id_usuario');
+    }
 }
