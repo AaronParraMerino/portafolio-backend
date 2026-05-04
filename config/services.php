@@ -38,7 +38,23 @@ return [
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID'),
     ],
+
     'github' => [
-    'token' => env('GITHUB_TOKEN'),
-],
+        'client_id'     => env('GITHUB_CLIENT_ID'),
+        'client_secret' => env('GITHUB_CLIENT_SECRET'),
+        'redirect'      => env('APP_URL') . '/api/auth/github/callback',
+        'token'         => env('GITHUB_TOKEN'),
+    ],
+
+    'gitlab' => [
+        'client_id'     => env('GITLAB_CLIENT_ID'),
+        'client_secret' => env('GITLAB_CLIENT_SECRET'),
+        'redirect'      => env('APP_URL') . '/api/auth/gitlab/callback',
+    ],
+
+    'discord' => [
+        'client_id'     => env('DISCORD_CLIENT_ID'),
+        'client_secret' => env('DISCORD_CLIENT_SECRET'),
+        'redirect'      => env('APP_URL') . '/api/auth/discord/callback',
+    ],
 ];
