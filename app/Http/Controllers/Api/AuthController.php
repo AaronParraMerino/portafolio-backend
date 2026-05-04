@@ -110,6 +110,13 @@ class AuthController extends Controller
         ], 200);
     }
 
+    public function me(Request $request): JsonResponse
+    {
+        return response()->json([
+            'data' => $request->user(),
+        ], 200);
+    }
+
     public function googleAuth(Request $request): JsonResponse
 {
     $validator = Validator::make($request->all(), [
