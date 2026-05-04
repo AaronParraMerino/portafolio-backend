@@ -7,6 +7,8 @@ use App\Services\api\AuthService;
 use App\Services\api\SeccionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
@@ -188,6 +190,15 @@ class AuthController extends Controller
 // ─────────────────────────────────────────────────────────────
 
 private const OAUTH_PROVIDERS = [
+    'google' => [
+        'url'    => 'https://accounts.google.com/o/oauth2/v2/auth',
+        'params' => [
+            'response_type' => 'code',
+            'scope' => 'openid email profile',
+            'access_type' => 'offline',
+            'prompt' => 'select_account',
+        ],
+    ],
     'github' => [
         'url'    => 'https://github.com/login/oauth/authorize',
         'params' => ['scope' => 'user:email'],
@@ -220,6 +231,80 @@ public function oauthRedirect(string $provider): \Illuminate\Http\RedirectRespon
     return redirect($config['url'] . '?' . http_build_query($params));
 }
 
+public function linkedProviders(Request $request): JsonResponse
+{
+    $user = $request->user();
+
+    if (! $user) {
+        return response()->json(['message' => 'No hay sesión activa'], 401);
+    }
+
+    return response()->json([
+        'data' => $this->authService->getLinkedProviders($user->id_usuario),
+    ]);
+}
+
+public function oauthConnectUrl(string $provider, Request $request): JsonResponse
+{
+    if (! array_key_exists($provider, self::OAUTH_PROVIDERS)) {
+        return response()->json(['message' => 'Proveedor no soportado'], 400);
+    }
+
+    $user = $request->user();
+
+    if (! $user) {
+        return response()->json(['message' => 'No hay sesión activa'], 401);
+    }
+
+    $state = (string) Str::uuid();
+
+    Cache::put('oauth_connect:' . $state, [
+        'usuario_id' => $user->id_usuario,
+        'provider' => $provider,
+    ], now()->addMinutes(10));
+
+    $config = self::OAUTH_PROVIDERS[$provider];
+    $clientId = config("services.{$provider}.client_id");
+    $redirectUri = config("services.{$provider}.redirect");
+
+    $params = array_merge($config['params'], [
+        'client_id' => $clientId,
+        'redirect_uri' => $redirectUri,
+        'state' => $state,
+    ]);
+
+    return response()->json([
+        'url' => $config['url'] . '?' . http_build_query($params),
+    ]);
+}
+
+public function oauthUnlink(string $provider, Request $request): JsonResponse
+{
+    if (! array_key_exists($provider, self::OAUTH_PROVIDERS)) {
+        return response()->json(['message' => 'Proveedor no soportado'], 400);
+    }
+
+    $user = $request->user();
+
+    if (! $user) {
+        return response()->json(['message' => 'No hay sesión activa'], 401);
+    }
+
+    $result = $this->authService->unlinkOAuthAccountFromUser((int) $user->id_usuario, $provider);
+
+    if ($result['status'] === 'not_found') {
+        return response()->json(['message' => 'No existe una cuenta vinculada para ese proveedor.'], 404);
+    }
+
+    if ($result['status'] === 'last_provider') {
+        return response()->json(['message' => 'No puedes desvincular tu única cuenta vinculada. Establece primero una contraseña en Configuración → Cambiar contraseña.'], 422);
+    }
+
+    return response()->json([
+        'message' => 'Cuenta desvinculada correctamente.',
+    ]);
+}
+
 public function oauthCallback(string $provider, Request $request): \Illuminate\Http\RedirectResponse|\Illuminate\Http\JsonResponse
 {
     $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
@@ -231,6 +316,39 @@ public function oauthCallback(string $provider, Request $request): \Illuminate\H
     $code = $request->query('code');
     if (! $code) {
         return redirect($frontendUrl . '/auth/login?oauth_error=cancelled');
+    }
+
+    $state = (string) $request->query('state', '');
+    if ($state !== '') {
+        $connectData = Cache::pull('oauth_connect:' . $state);
+
+        if (is_array($connectData) && ($connectData['provider'] ?? null) === $provider) {
+            $result = $this->authService->linkOAuthAccountToUser(
+                (int) $connectData['usuario_id'],
+                $provider,
+                (string) $code,
+            );
+
+            if ($result['status'] === 'success' || $result['status'] === 'already_connected') {
+                $params = http_build_query([
+                    'oauth_connect' => 'success',
+                    'provider' => $provider,
+                ]);
+                return redirect($frontendUrl . '/dashboard/settings/vincular-cuenta?' . $params);
+            }
+
+            $error = $result['status'] ?? 'invalid';
+            $params = http_build_query([
+                'oauth_connect' => 'error',
+                'provider' => $provider,
+                'oauth_connect_error' => $error,
+            ]);
+            return redirect($frontendUrl . '/dashboard/settings/vincular-cuenta?' . $params);
+        }
+    }
+
+    if ($provider === 'google') {
+        return redirect($frontendUrl . '/auth/login?oauth_error=unsupported');
     }
 
     $method = 'loginWith' . ucfirst($provider);

@@ -474,4 +474,344 @@ private function splitProviderName(?string $name, string $provider = ''): array
     $parts = preg_split('/\s+/', trim($name), 2);
     return [$parts[0], $parts[1] ?? ucfirst($provider)];
 }
+
+public function getLinkedProviders(int $usuarioId): array
+{
+    $providers = ['google', 'github', 'gitlab', 'discord'];
+
+    $links = CuentaOauth::where('usuario_id', $usuarioId)
+        ->whereIn('provider', $providers)
+        ->get()
+        ->keyBy('provider');
+
+    $result = [];
+
+    foreach ($providers as $provider) {
+        $link = $links->get($provider);
+
+        $detail = 'No vinculado';
+        if ($link) {
+            $detail = $link->email ?: ($link->nombre ?: 'Conectado');
+        }
+
+        $result[] = [
+            'provider' => $provider,
+            'connected' => (bool) $link,
+            'detail' => $detail,
+        ];
+    }
+
+    return $result;
+}
+
+public function linkOAuthAccountToUser(int $usuarioId, string $provider, string $code): array
+{
+    $usuario = Usuario::find($usuarioId);
+
+    if (! $usuario) {
+        return ['status' => 'invalid_user'];
+    }
+
+    if ($usuario->estado === 'bloqueado') {
+        return ['status' => 'blocked'];
+    }
+
+    $identity = $this->resolveOAuthIdentityByCode($provider, $code);
+
+    if (($identity['status'] ?? 'invalid') !== 'success') {
+        return ['status' => 'invalid'];
+    }
+
+    $existingByProviderUser = CuentaOauth::where('provider', $provider)
+        ->where('provider_user_id', $identity['provider_user_id'])
+        ->first();
+
+    if ($existingByProviderUser && $existingByProviderUser->usuario_id !== $usuario->id_usuario) {
+        return ['status' => 'already_linked'];
+    }
+
+    $existingForUserProvider = CuentaOauth::where('usuario_id', $usuario->id_usuario)
+        ->where('provider', $provider)
+        ->first();
+
+    if ($existingForUserProvider && $existingForUserProvider->provider_user_id !== $identity['provider_user_id']) {
+        return ['status' => 'provider_conflict'];
+    }
+
+    if ($existingForUserProvider) {
+        $existingForUserProvider->update([
+            'email' => $identity['email'],
+            'nombre' => $identity['nombre'],
+            'foto_url' => $identity['foto_url'],
+        ]);
+
+        return [
+            'status' => 'already_connected',
+            'provider' => $provider,
+            'detail' => $identity['email'] ?: ($identity['nombre'] ?: 'Conectado'),
+        ];
+    }
+
+    CuentaOauth::create([
+        'usuario_id' => $usuario->id_usuario,
+        'provider' => $provider,
+        'provider_user_id' => $identity['provider_user_id'],
+        'email' => $identity['email'],
+        'nombre' => $identity['nombre'],
+        'foto_url' => $identity['foto_url'],
+    ]);
+
+    return [
+        'status' => 'success',
+        'provider' => $provider,
+        'detail' => $identity['email'] ?: ($identity['nombre'] ?: 'Conectado'),
+    ];
+}
+
+public function unlinkOAuthAccountFromUser(int $usuarioId, string $provider): array
+{
+    $link = CuentaOauth::where('usuario_id', $usuarioId)
+        ->where('provider', $provider)
+        ->first();
+
+    if (! $link) {
+        return ['status' => 'not_found'];
+    }
+
+    $total = CuentaOauth::where('usuario_id', $usuarioId)->count();
+    if ($total <= 1) {
+        return ['status' => 'last_provider'];
+    }
+
+    $link->delete();
+
+    return ['status' => 'success'];
+}
+
+private function resolveOAuthIdentityByCode(string $provider, string $code): array
+{
+    return match ($provider) {
+        'google' => $this->resolveGoogleIdentityByCode($code),
+        'github' => $this->resolveGithubIdentityByCode($code),
+        'gitlab' => $this->resolveGitlabIdentityByCode($code),
+        'discord' => $this->resolveDiscordIdentityByCode($code),
+        default => ['status' => 'invalid'],
+    };
+}
+
+private function resolveGoogleIdentityByCode(string $code): array
+{
+    $tokenResponse = Http::timeout(10)
+        ->asForm()
+        ->post('https://oauth2.googleapis.com/token', [
+            'code' => $code,
+            'client_id' => config('services.google.client_id'),
+            'client_secret' => config('services.google.client_secret'),
+            'redirect_uri' => config('services.google.redirect'),
+            'grant_type' => 'authorization_code',
+        ]);
+
+    if (! $tokenResponse->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $accessToken = $tokenResponse->json()['access_token'] ?? null;
+    $idToken = $tokenResponse->json()['id_token'] ?? null;
+
+    if (! $accessToken || ! $idToken) {
+        return ['status' => 'invalid'];
+    }
+
+    $tokenInfo = Http::timeout(10)->get('https://oauth2.googleapis.com/tokeninfo', [
+        'id_token' => $idToken,
+    ]);
+
+    if (! $tokenInfo->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $payload = $tokenInfo->json();
+    $clientId = config('services.google.client_id');
+    $providerId = (string) ($payload['sub'] ?? '');
+    $email = strtolower(trim($payload['email'] ?? ''));
+    $verified = in_array($payload['email_verified'] ?? false, [true, 'true'], true);
+    $name = $payload['name'] ?? null;
+
+    if (! $clientId || ($payload['aud'] ?? null) !== $clientId || ! $providerId || ! $email || ! $verified) {
+        return ['status' => 'invalid'];
+    }
+
+    $userInfo = Http::timeout(10)
+        ->withToken($accessToken)
+        ->get('https://openidconnect.googleapis.com/v1/userinfo');
+
+    if ($userInfo->ok()) {
+        $name = $userInfo->json()['name'] ?? $name;
+    }
+
+    return [
+        'status' => 'success',
+        'provider_user_id' => $providerId,
+        'email' => $email,
+        'nombre' => $name,
+        'foto_url' => $this->uploadGoogleImageToSupabase($payload['picture'] ?? null),
+    ];
+}
+
+private function resolveGithubIdentityByCode(string $code): array
+{
+    $tokenResponse = Http::timeout(10)
+        ->withHeaders(['Accept' => 'application/json'])
+        ->post('https://github.com/login/oauth/access_token', [
+            'client_id' => config('services.github.client_id'),
+            'client_secret' => config('services.github.client_secret'),
+            'code' => $code,
+            'redirect_uri' => config('services.github.redirect'),
+        ]);
+
+    if (! $tokenResponse->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $accessToken = $tokenResponse->json()['access_token'] ?? null;
+    if (! $accessToken) {
+        return ['status' => 'invalid'];
+    }
+
+    $userResponse = Http::timeout(10)
+        ->withHeaders([
+            'Authorization' => "Bearer {$accessToken}",
+            'User-Agent' => 'portafolio-app',
+        ])
+        ->get('https://api.github.com/user');
+
+    if (! $userResponse->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $userData = $userResponse->json();
+    $email = $userData['email'] ?? null;
+
+    if (! $email) {
+        $emailsResponse = Http::timeout(10)
+            ->withHeaders([
+                'Authorization' => "Bearer {$accessToken}",
+                'User-Agent' => 'portafolio-app',
+            ])
+            ->get('https://api.github.com/user/emails');
+
+        if ($emailsResponse->ok()) {
+            $emails = collect($emailsResponse->json());
+            $primary = $emails->firstWhere('primary', true);
+            $email = $primary['email'] ?? ($emails->first()['email'] ?? null);
+        }
+    }
+
+    $providerId = (string) ($userData['id'] ?? '');
+    if (! $email || ! $providerId) {
+        return ['status' => 'invalid'];
+    }
+
+    return [
+        'status' => 'success',
+        'provider_user_id' => $providerId,
+        'email' => strtolower(trim($email)),
+        'nombre' => $userData['name'] ?? $userData['login'] ?? null,
+        'foto_url' => $userData['avatar_url'] ?? null,
+    ];
+}
+
+private function resolveGitlabIdentityByCode(string $code): array
+{
+    $tokenResponse = Http::timeout(10)
+        ->asForm()
+        ->post('https://gitlab.com/oauth/token', [
+            'client_id' => config('services.gitlab.client_id'),
+            'client_secret' => config('services.gitlab.client_secret'),
+            'code' => $code,
+            'grant_type' => 'authorization_code',
+            'redirect_uri' => config('services.gitlab.redirect'),
+        ]);
+
+    if (! $tokenResponse->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $accessToken = $tokenResponse->json()['access_token'] ?? null;
+    if (! $accessToken) {
+        return ['status' => 'invalid'];
+    }
+
+    $userResponse = Http::timeout(10)
+        ->withHeaders(['Authorization' => "Bearer {$accessToken}"])
+        ->get('https://gitlab.com/api/v4/user');
+
+    if (! $userResponse->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $userData = $userResponse->json();
+    $providerId = (string) ($userData['id'] ?? '');
+    $email = strtolower(trim($userData['email'] ?? ''));
+
+    if (! $providerId || ! $email) {
+        return ['status' => 'invalid'];
+    }
+
+    return [
+        'status' => 'success',
+        'provider_user_id' => $providerId,
+        'email' => $email,
+        'nombre' => $userData['name'] ?? null,
+        'foto_url' => $userData['avatar_url'] ?? null,
+    ];
+}
+
+private function resolveDiscordIdentityByCode(string $code): array
+{
+    $tokenResponse = Http::timeout(10)
+        ->asForm()
+        ->post('https://discord.com/api/oauth2/token', [
+            'client_id' => config('services.discord.client_id'),
+            'client_secret' => config('services.discord.client_secret'),
+            'code' => $code,
+            'grant_type' => 'authorization_code',
+            'redirect_uri' => config('services.discord.redirect'),
+        ]);
+
+    if (! $tokenResponse->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $accessToken = $tokenResponse->json()['access_token'] ?? null;
+    if (! $accessToken) {
+        return ['status' => 'invalid'];
+    }
+
+    $userResponse = Http::timeout(10)
+        ->withHeaders(['Authorization' => "Bearer {$accessToken}"])
+        ->get('https://discord.com/api/users/@me');
+
+    if (! $userResponse->ok()) {
+        return ['status' => 'invalid'];
+    }
+
+    $userData = $userResponse->json();
+    $providerId = (string) ($userData['id'] ?? '');
+    $email = strtolower(trim($userData['email'] ?? ''));
+    $verified = (bool) ($userData['verified'] ?? false);
+    $avatar = $userData['avatar'] ?? null;
+
+    if (! $providerId || ! $email || ! $verified) {
+        return ['status' => 'invalid'];
+    }
+
+    return [
+        'status' => 'success',
+        'provider_user_id' => $providerId,
+        'email' => $email,
+        'nombre' => $userData['username'] ?? null,
+        'foto_url' => $avatar ? "https://cdn.discordapp.com/avatars/{$providerId}/{$avatar}.png" : null,
+    ];
+}
 }
