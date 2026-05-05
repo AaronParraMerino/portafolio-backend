@@ -199,6 +199,23 @@ class ProfileService
         return $this->getProfile($userId);
     }
 
+    public function updatePortfolioVisibility(int $userId, bool $isPublic): array
+    {
+        $perfil = Perfil::firstOrCreate(
+            ['usuario_id' => $userId],
+            ['es_publico' => $isPublic]
+        );
+
+        if ($perfil->es_publico !== $isPublic) {
+            $perfil->update(['es_publico' => $isPublic]);
+        }
+
+        return [
+            'user_id' => $userId,
+            'portfolio_publico' => $perfil->es_publico,
+        ];
+    }
+
     /**
      * Seccion crud de imagenes de perfil---------------------------
      *
