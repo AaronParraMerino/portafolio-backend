@@ -19,6 +19,7 @@ require __DIR__.'/api/enlaces.php';
 
 ################# apis portafolio ############################
 require __DIR__.'/api/tecnologia.php';
+require __DIR__.'/api/proyectos.php';
 #############################################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {

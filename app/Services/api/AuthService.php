@@ -182,6 +182,12 @@ public function loginWithGithub(string $code): array
         return ['status' => 'invalid'];
     }
 
+    $oauthMeta = [
+        'access_token' => $accessToken,
+        'token_scopes' => $tokenResponse->json()['scope'] ?? null,
+        'token_updated_at' => now(),
+    ];
+
     $userResponse = Http::timeout(10)
         ->withHeaders([
             'Authorization' => "Bearer {$accessToken}",
@@ -220,7 +226,7 @@ public function loginWithGithub(string $code): array
     $nombre     = $userData['name'] ?? $userData['login'] ?? null;
     $fotoUrl    = $userData['avatar_url'] ?? null;
 
-    return $this->findOrCreateOAuthUser('github', $providerId, strtolower(trim($email)), $nombre, $fotoUrl);
+    return $this->findOrCreateOAuthUser('github', $providerId, strtolower(trim($email)), $nombre, $fotoUrl, $oauthMeta);
 }
 
 public function loginWithGitlab(string $code): array
@@ -318,7 +324,8 @@ private function findOrCreateOAuthUser(
     string $providerId,
     string $email,
     ?string $nombre,
-    ?string $fotoUrl
+    ?string $fotoUrl,
+    ?array $oauthMeta = null
 ): array {
     $usuarioByEmail = Usuario::where('correo', $email)->first();
 
@@ -332,6 +339,8 @@ private function findOrCreateOAuthUser(
         }
 
         $usuario = $cuenta->usuario;
+
+        $cuenta->update($this->buildOauthAccountPayload($provider, $email, $nombre, $fotoUrl, $oauthMeta));
     } else {
         $usuario = $usuarioByEmail;
 
@@ -384,9 +393,7 @@ private function findOrCreateOAuthUser(
                 'usuario_id'       => $usuario->id_usuario,
                 'provider'         => $provider,
                 'provider_user_id' => $providerId,
-                'email'            => $email,
-                'nombre'           => $nombre,
-                'foto_url'         => $fotoUrl,
+                ...$this->buildOauthAccountPayload($provider, $email, $nombre, $fotoUrl, $oauthMeta),
             ]);
         }
     }
@@ -449,9 +456,13 @@ public function confirmOAuthLink(string $linkToken, ?string $password = null, ?s
             'usuario_id'       => $usuario->id_usuario,
             'provider'         => $data['provider'],
             'provider_user_id' => $data['provider_user_id'],
-            'email'            => $data['email'],
-            'nombre'           => $data['nombre'],
-            'foto_url'         => $data['foto_url'],
+            ...$this->buildOauthAccountPayload(
+                $data['provider'],
+                $data['email'],
+                $data['nombre'],
+                $data['foto_url'],
+                $data['oauth_meta'] ?? null,
+            ),
         ]);
     }
 
@@ -540,9 +551,13 @@ public function linkOAuthAccountToUser(int $usuarioId, string $provider, string 
 
     if ($existingForUserProvider) {
         $existingForUserProvider->update([
-            'email' => $identity['email'],
-            'nombre' => $identity['nombre'],
-            'foto_url' => $identity['foto_url'],
+            ...$this->buildOauthAccountPayload(
+                $provider,
+                $identity['email'],
+                $identity['nombre'],
+                $identity['foto_url'],
+                $identity['oauth_meta'] ?? null,
+            ),
         ]);
 
         return [
@@ -556,9 +571,13 @@ public function linkOAuthAccountToUser(int $usuarioId, string $provider, string 
         'usuario_id' => $usuario->id_usuario,
         'provider' => $provider,
         'provider_user_id' => $identity['provider_user_id'],
-        'email' => $identity['email'],
-        'nombre' => $identity['nombre'],
-        'foto_url' => $identity['foto_url'],
+        ...$this->buildOauthAccountPayload(
+            $provider,
+            $identity['email'],
+            $identity['nombre'],
+            $identity['foto_url'],
+            $identity['oauth_meta'] ?? null,
+        ),
     ]);
 
     return [
@@ -678,6 +697,12 @@ private function resolveGithubIdentityByCode(string $code): array
         return ['status' => 'invalid'];
     }
 
+    $oauthMeta = [
+        'access_token' => $accessToken,
+        'token_scopes' => $tokenResponse->json()['scope'] ?? null,
+        'token_updated_at' => now(),
+    ];
+
     $userResponse = Http::timeout(10)
         ->withHeaders([
             'Authorization' => "Bearer {$accessToken}",
@@ -718,7 +743,34 @@ private function resolveGithubIdentityByCode(string $code): array
         'email' => strtolower(trim($email)),
         'nombre' => $userData['name'] ?? $userData['login'] ?? null,
         'foto_url' => $userData['avatar_url'] ?? null,
+        'oauth_meta' => $oauthMeta,
     ];
+}
+
+private function buildOauthAccountPayload(
+    string $provider,
+    string $email,
+    ?string $nombre,
+    ?string $fotoUrl,
+    ?array $oauthMeta = null,
+): array {
+    $payload = [
+        'email' => $email,
+        'nombre' => $nombre,
+        'foto_url' => $fotoUrl,
+    ];
+
+    if ($provider !== 'github' || ! is_array($oauthMeta)) {
+        return $payload;
+    }
+
+    return array_merge($payload, [
+        'access_token' => $oauthMeta['access_token'] ?? null,
+        'refresh_token' => $oauthMeta['refresh_token'] ?? null,
+        'token_scopes' => $oauthMeta['token_scopes'] ?? null,
+        'token_expires_at' => $oauthMeta['token_expires_at'] ?? null,
+        'token_updated_at' => $oauthMeta['token_updated_at'] ?? now(),
+    ]);
 }
 
 private function resolveGitlabIdentityByCode(string $code): array

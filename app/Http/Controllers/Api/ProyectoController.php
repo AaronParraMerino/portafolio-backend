@@ -1,0 +1,965 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Services\api\GithubRepositorySyncService;
+use App\Services\api\TecnologiaService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+class ProyectoController extends Controller
+{
+    private const TIPO_REPOS = 'repositorio';
+    private const TIPO_DEMO = 'demo';
+    private const TIPO_VIDEO = 'video';
+    private const TIPO_IMAGEN = 'imagen';
+    private const TIPO_DOCUMENTO = 'documento';
+
+    public function __construct(
+        private readonly GithubRepositorySyncService $githubRepositorySyncService,
+        private readonly TecnologiaService $tecnologiaService,
+    ) {
+    }
+
+    public function indexByUsuario(Request $request, int $userId): JsonResponse
+    {
+        $authUserId = (int) ($request->user()->id_usuario ?? 0);
+        if ($authUserId <= 0 || $authUserId !== $userId) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $proyectos = DB::table('participaciones as p')
+            ->join('proyectos as pr', 'pr.id_proyecto', '=', 'p.id_proyecto')
+            ->where('p.id_usuario', $userId)
+            ->whereNull('p.deleted_at')
+            ->whereNull('pr.deleted_at')
+            ->orderByDesc('pr.updated_at')
+            ->select('pr.*', 'p.rol', 'p.descripcion_aporte', 'p.visibilidad', 'p.fecha_inicio as part_fecha_inicio', 'p.fecha_fin as part_fecha_fin')
+            ->get();
+
+        $data = $proyectos->map(function ($row) {
+            return $this->serializeProject((array) $row);
+        })->values();
+
+        return response()->json(['data' => $data]);
+    }
+
+    public function show(Request $request, int $id): JsonResponse
+    {
+        $project = $this->findProjectForUser((int) ($request->user()->id_usuario ?? 0), $id);
+        if (!$project) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        return response()->json(['data' => $this->serializeProject($project)]);
+    }
+
+    public function store(Request $request): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        if ($userId <= 0) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $payload = $this->validatePayload($request);
+        $existingProjectId = $this->githubRepositorySyncService->findExistingProjectForValidatedRepoUrls(
+            $userId,
+            $payload['url_repositorios'] ?? [],
+        );
+
+        if ($existingProjectId) {
+            $this->githubRepositorySyncService->linkUsuarioToExistingProjectByRepo($userId, $existingProjectId, [
+                'rol' => $payload['rol'] ?? null,
+                'descripcion_aporte' => $payload['descripcion_aporte'] ?? null,
+            ]);
+
+            $project = $this->findProjectForUser($userId, $existingProjectId);
+            return response()->json([
+                'message' => 'Este repositorio ya tenia un proyecto vinculado; se agrego tu participacion al proyecto existente.',
+                'data' => $this->serializeProject($project),
+                'linked_existing_project' => true,
+            ], 200);
+        }
+
+        $idProyecto = DB::transaction(function () use ($payload, $userId) {
+            $now = now();
+
+            $idProyecto = DB::table('proyectos')->insertGetId([
+                'titulo' => $payload['titulo'],
+                'descripcion' => $payload['descripcion'] ?? null,
+                'plataforma_objetivo' => $this->mapPlataforma($payload['desarrollado_para'] ?? null),
+                'categoria_proyecto' => $this->mapCategoria($payload['tipo'] ?? null),
+                'estado_publicacion' => $this->mapEstadoPublicacion($payload['estado_publicacion'] ?? $payload['estado'] ?? null),
+                'estado_desarrollo' => $this->mapEstadoDesarrollo($payload['estado_desarrollo'] ?? $payload['estado'] ?? null),
+                'fecha_inicio' => $payload['fecha_inicio'] ?? null,
+                'fecha_fin' => $payload['fecha_fin'] ?? null,
+                'origen' => 'manual',
+                'es_destacado' => 'false',
+                'orden' => 0,
+                'publicado_at' => ($payload['estado_publicacion'] ?? null) === 'publicado' ? $now : null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], 'id_proyecto');
+
+            DB::table('participaciones')->insert([
+                'id_usuario' => $userId,
+                'id_proyecto' => $idProyecto,
+                'rol' => $payload['rol'] ?? null,
+                'descripcion_aporte' => $payload['descripcion_aporte'] ?? null,
+                'es_propietario' => 'true',
+                'visibilidad' => ($payload['es_publico'] ?? true) ? 'publico' : 'privado',
+                'estado_participacion' => 'activo',
+                'fecha_inicio' => $payload['fecha_inicio'] ?? null,
+                'fecha_fin' => $payload['fecha_fin'] ?? null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            return (int) $idProyecto;
+        });
+
+        $this->syncLinkEvidences($idProyecto, $payload);
+        $this->syncProjectRepositories($userId, $idProyecto, $payload);
+        $this->syncProjectTechnologies($userId, $idProyecto, $payload);
+
+        $project = $this->findProjectForUser($userId, $idProyecto);
+        return response()->json(['data' => $this->serializeProject($project)], 201);
+    }
+
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $project = $this->findProjectForUser($userId, $id);
+        if (!$project) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $payload = $this->validatePayload($request, true);
+
+        DB::transaction(function () use ($payload, $id, $userId) {
+            $updateProject = [];
+            foreach (['titulo', 'descripcion', 'fecha_inicio', 'fecha_fin'] as $field) {
+                if (array_key_exists($field, $payload)) {
+                    $updateProject[$field] = $payload[$field];
+                }
+            }
+
+            if (array_key_exists('desarrollado_para', $payload)) {
+                $updateProject['plataforma_objetivo'] = $this->mapPlataforma($payload['desarrollado_para']);
+            }
+
+            if (array_key_exists('tipo', $payload)) {
+                $updateProject['categoria_proyecto'] = $this->mapCategoria($payload['tipo']);
+            }
+
+            if (array_key_exists('estado_publicacion', $payload) || array_key_exists('estado', $payload)) {
+                $updateProject['estado_publicacion'] = $this->mapEstadoPublicacion($payload['estado_publicacion'] ?? $payload['estado']);
+            }
+
+            if (array_key_exists('estado_desarrollo', $payload) || array_key_exists('estado', $payload)) {
+                $updateProject['estado_desarrollo'] = $this->mapEstadoDesarrollo($payload['estado_desarrollo'] ?? $payload['estado']);
+            }
+
+            if (!empty($updateProject)) {
+                $updateProject['updated_at'] = now();
+                DB::table('proyectos')->where('id_proyecto', $id)->update($updateProject);
+            }
+
+            $updateParticipacion = [];
+            if (array_key_exists('rol', $payload)) {
+                $updateParticipacion['rol'] = $payload['rol'];
+            }
+            if (array_key_exists('descripcion_aporte', $payload)) {
+                $updateParticipacion['descripcion_aporte'] = $payload['descripcion_aporte'];
+            }
+            if (array_key_exists('es_publico', $payload)) {
+                $updateParticipacion['visibilidad'] = $payload['es_publico'] ? 'publico' : 'privado';
+            }
+            if (array_key_exists('fecha_inicio', $payload)) {
+                $updateParticipacion['fecha_inicio'] = $payload['fecha_inicio'];
+            }
+            if (array_key_exists('fecha_fin', $payload)) {
+                $updateParticipacion['fecha_fin'] = $payload['fecha_fin'];
+            }
+
+            if (!empty($updateParticipacion)) {
+                $updateParticipacion['updated_at'] = now();
+                DB::table('participaciones')
+                    ->where('id_proyecto', $id)
+                    ->where('id_usuario', $userId)
+                    ->whereNull('deleted_at')
+                    ->update($updateParticipacion);
+            }
+
+        });
+
+        $this->syncLinkEvidences($id, $payload);
+        $this->syncProjectRepositories($userId, $id, $payload);
+        $this->syncProjectTechnologies($userId, $id, $payload);
+
+        $updated = $this->findProjectForUser($userId, $id);
+        return response()->json(['data' => $this->serializeProject($updated)]);
+    }
+
+    public function destroy(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $project = $this->findProjectForUser($userId, $id);
+        if (!$project) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        DB::table('proyectos')->where('id_proyecto', $id)->update([
+            'deleted_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return response()->json(['message' => 'Proyecto eliminado correctamente']);
+    }
+
+    public function detachParticipation(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $participacion = DB::table('participaciones')
+            ->where('id_usuario', $userId)
+            ->where('id_proyecto', $id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        if (! $participacion) {
+            return response()->json(['message' => 'Participacion no encontrada'], 404);
+        }
+
+        $participantesActivos = DB::table('participaciones')
+            ->where('id_proyecto', $id)
+            ->whereNull('deleted_at')
+            ->count();
+
+        if ($participantesActivos <= 1) {
+            return response()->json([
+                'message' => 'No puedes desvincularte porque eres el unico participante del proyecto. Puedes eliminar el proyecto.',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($participacion) {
+            DB::table('participacion_repositorios')
+                ->where('id_participacion', $participacion->id_participacion)
+                ->delete();
+
+            DB::table('participaciones')
+                ->where('id_participacion', $participacion->id_participacion)
+                ->update([
+                    'deleted_at' => now(),
+                    'updated_at' => now(),
+                ]);
+        });
+
+        return response()->json(['message' => 'Participacion desvinculada correctamente']);
+    }
+
+    public function uploadImages(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        if (!$this->findProjectForUser($userId, $id)) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $request->validate([
+            'images.*' => 'sometimes|file|image|max:2048',
+            'imagenes.*' => 'sometimes|file|image|max:2048',
+        ], [
+            'images.*.uploaded' => 'No se puede subir archivos mayores a 2 MB.',
+            'imagenes.*.uploaded' => 'No se puede subir archivos mayores a 2 MB.',
+            'images.*.max' => 'No se puede subir archivos mayores a 2 MB.',
+            'imagenes.*.max' => 'No se puede subir archivos mayores a 2 MB.',
+        ]);
+
+        $files = $request->file('images', []);
+        if (empty($files)) {
+            $files = $request->file('imagenes', []);
+        }
+
+        $saved = [];
+        $baseOrder = (int) DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $id)
+            ->whereIn('tipo', [self::TIPO_IMAGEN, 'captura'])
+            ->whereNull('deleted_at')
+            ->max('orden');
+
+        foreach ($files as $index => $file) {
+            $upload = $this->uploadProjectFileToSupabase($file, "projects/{$id}/images");
+            $path = $upload['path'];
+            $url = $upload['url'];
+
+            DB::table('proyecto_evidencias')->insert([
+                'id_proyecto' => $id,
+                'titulo' => $file->getClientOriginalName() ?: ('Imagen ' . ($index + 1)),
+                'descripcion' => null,
+                'tipo' => self::TIPO_IMAGEN,
+                'url' => $url,
+                'archivo_path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'tamanio_bytes' => $file->getSize(),
+                'es_portada' => ($index === 0 && $baseOrder <= 0) ? 'true' : 'false',
+                'es_visible' => 'true',
+                'orden' => $baseOrder + $index + 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $saved[] = $url;
+        }
+
+        return response()->json(['urls' => $saved, 'imagenes' => $saved]);
+    }
+
+    public function deleteImages(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        if (!$this->findProjectForUser($userId, $id)) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $urls = collect($request->input('urls', $request->input('imagenes', [])))
+            ->filter(fn ($u) => is_string($u) && trim($u) !== '')
+            ->values();
+
+        if ($urls->isEmpty()) {
+            return response()->json(['message' => 'Sin imágenes para eliminar']);
+        }
+
+        $rows = DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $id)
+            ->whereIn('tipo', [self::TIPO_IMAGEN, 'captura'])
+            ->whereNull('deleted_at')
+            ->get();
+
+        $toDeleteIds = [];
+        foreach ($rows as $row) {
+            $rowUrl = (string) ($row->url ?? '');
+            $rowPath = (string) ($row->archivo_path ?? '');
+
+            foreach ($urls as $candidate) {
+                $normalizedCandidatePath = $this->normalizeStoragePathFromUrl((string) $candidate);
+                if ($candidate === $rowUrl || ($normalizedCandidatePath && $normalizedCandidatePath === $rowPath)) {
+                    if ($rowPath) {
+                        $this->deleteProjectFile($rowPath, $rowUrl);
+                    }
+                    $toDeleteIds[] = $row->id_evidencia;
+                    break;
+                }
+            }
+        }
+
+        if (!empty($toDeleteIds)) {
+            DB::table('proyecto_evidencias')->whereIn('id_evidencia', $toDeleteIds)->update([
+                'deleted_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        return response()->json(['message' => 'Imágenes eliminadas correctamente']);
+    }
+
+    public function reorderImages(Request $request, int $id): JsonResponse
+    {
+        return response()->json(['message' => 'Reordenado no implementado', 'ok' => true]);
+    }
+
+    public function uploadDocuments(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        if (!$this->findProjectForUser($userId, $id)) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $request->validate([
+            'documents.*' => 'sometimes|file|max:2048',
+            'documentos.*' => 'sometimes|file|max:2048',
+        ], [
+            'documents.*.uploaded' => 'No se puede subir archivos mayores a 2 MB.',
+            'documentos.*.uploaded' => 'No se puede subir archivos mayores a 2 MB.',
+            'documents.*.max' => 'No se puede subir archivos mayores a 2 MB.',
+            'documentos.*.max' => 'No se puede subir archivos mayores a 2 MB.',
+        ]);
+
+        $files = $request->file('documents', []);
+        if (empty($files)) {
+            $files = $request->file('documentos', []);
+        }
+
+        $docs = [];
+        $baseOrder = (int) DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $id)
+            ->whereIn('tipo', [self::TIPO_DOCUMENTO, 'pdf', 'documentacion', 'presentacion'])
+            ->whereNull('deleted_at')
+            ->max('orden');
+
+        foreach ($files as $index => $file) {
+            $upload = $this->uploadProjectFileToSupabase($file, "projects/{$id}/documents");
+            $path = $upload['path'];
+            $url = $upload['url'];
+            $mime = $file->getMimeType();
+            $isPdf = Str::contains((string) $mime, 'pdf');
+
+            DB::table('proyecto_evidencias')->insert([
+                'id_proyecto' => $id,
+                'titulo' => $file->getClientOriginalName() ?: ('Documento ' . ($index + 1)),
+                'descripcion' => null,
+                'tipo' => $isPdf ? 'pdf' : self::TIPO_DOCUMENTO,
+                'url' => $url,
+                'archivo_path' => $path,
+                'mime_type' => $mime,
+                'tamanio_bytes' => $file->getSize(),
+                'es_portada' => 'false',
+                'es_visible' => 'true',
+                'orden' => $baseOrder + $index + 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $docs[] = [
+                'url' => $url,
+                'nombre' => $file->getClientOriginalName(),
+                'mime_type' => $mime,
+                'size' => $file->getSize(),
+            ];
+        }
+
+        return response()->json(['documents' => $docs, 'documentos' => $docs, 'urls' => collect($docs)->pluck('url')->values()]);
+    }
+
+    public function deleteDocuments(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        if (!$this->findProjectForUser($userId, $id)) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $urls = collect($request->input('urls', $request->input('documentos', [])))
+            ->filter(fn ($u) => is_string($u) && trim($u) !== '')
+            ->values();
+
+        if ($urls->isEmpty()) {
+            return response()->json(['message' => 'Sin documentos para eliminar']);
+        }
+
+        $rows = DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $id)
+            ->whereIn('tipo', [self::TIPO_DOCUMENTO, 'pdf', 'documentacion', 'presentacion'])
+            ->whereNull('deleted_at')
+            ->get();
+
+        $toDeleteIds = [];
+        foreach ($rows as $row) {
+            $rowUrl = (string) ($row->url ?? '');
+            $rowPath = (string) ($row->archivo_path ?? '');
+
+            foreach ($urls as $candidate) {
+                $normalizedCandidatePath = $this->normalizeStoragePathFromUrl((string) $candidate);
+                if ($candidate === $rowUrl || ($normalizedCandidatePath && $normalizedCandidatePath === $rowPath)) {
+                    if ($rowPath) {
+                        $this->deleteProjectFile($rowPath, $rowUrl);
+                    }
+                    $toDeleteIds[] = $row->id_evidencia;
+                    break;
+                }
+            }
+        }
+
+        if (!empty($toDeleteIds)) {
+            DB::table('proyecto_evidencias')->whereIn('id_evidencia', $toDeleteIds)->update([
+                'deleted_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        return response()->json(['message' => 'Documentos eliminados correctamente']);
+    }
+
+    public function reorderDocuments(Request $request, int $id): JsonResponse
+    {
+        return response()->json(['message' => 'Reordenado no implementado', 'ok' => true]);
+    }
+
+    public function updateLinks(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $project = $this->findProjectForUser($userId, $id);
+        if (!$project) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $payload = $request->validate([
+            'url_repositorios' => 'sometimes|array',
+            'url_repositorios.*' => 'nullable|string|max:500',
+            'url_demo' => 'nullable|string|max:500',
+            'url_videos' => 'sometimes|array',
+            'url_videos.*' => 'nullable|string|max:500',
+        ]);
+
+        $this->syncLinkEvidences($id, $payload);
+        $this->syncProjectRepositories($userId, $id, $payload);
+        $this->syncProjectTechnologies($userId, $id, $payload);
+
+        $updated = $this->findProjectForUser($userId, $id);
+        return response()->json(['data' => $this->serializeProject($updated)]);
+    }
+
+    private function validatePayload(Request $request, bool $partial = false): array
+    {
+        $rules = [
+            'titulo' => [$partial ? 'sometimes' : 'required', 'string', 'max:200'],
+            'descripcion' => 'nullable|string|max:600',
+            'estado' => 'nullable|string|max:30',
+            'estado_publicacion' => 'nullable|string|max:30',
+            'estado_desarrollo' => 'nullable|string|max:30',
+            'tipo' => 'nullable|string|max:80',
+            'desarrollado_para' => 'nullable|string|max:80',
+            'fecha_inicio' => 'nullable|date',
+            'fecha_fin' => 'nullable|date',
+            'es_publico' => 'nullable|boolean',
+            'rol' => 'nullable|string|max:100',
+            'descripcion_aporte' => 'nullable|string|max:600',
+            'url_repositorios' => 'nullable|array',
+            'url_repositorios.*' => 'nullable|string|max:500',
+            'url_demo' => 'nullable|string|max:500',
+            'url_videos' => 'nullable|array',
+            'url_videos.*' => 'nullable|string|max:500',
+            'etiquetas' => 'nullable|array',
+            'etiquetas.*' => 'nullable|string|max:100',
+            'tecnologias' => 'nullable|array',
+            'tecnologias.*' => 'nullable|string|max:100',
+        ];
+
+        return $request->validate($rules);
+    }
+
+    private function findProjectForUser(int $userId, int $id): ?array
+    {
+        if ($userId <= 0 || $id <= 0) {
+            return null;
+        }
+
+        $row = DB::table('participaciones as p')
+            ->join('proyectos as pr', 'pr.id_proyecto', '=', 'p.id_proyecto')
+            ->where('p.id_usuario', $userId)
+            ->where('pr.id_proyecto', $id)
+            ->whereNull('p.deleted_at')
+            ->whereNull('pr.deleted_at')
+            ->select('pr.*', 'p.rol', 'p.descripcion_aporte', 'p.visibilidad', 'p.fecha_inicio as part_fecha_inicio', 'p.fecha_fin as part_fecha_fin')
+            ->first();
+
+        return $row ? (array) $row : null;
+    }
+
+    private function serializeProject(array $project): array
+    {
+        $id = (int) $project['id_proyecto'];
+
+        $evidencias = DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $id)
+            ->whereNull('deleted_at')
+            ->orderBy('orden')
+            ->orderBy('id_evidencia')
+            ->get()
+            ->map(function ($ev) {
+                $arr = (array) $ev;
+                $arr['archivo_url'] = $arr['url'] ?? null;
+                return $arr;
+            })
+            ->values();
+
+        $repositorios = DB::table('proyecto_repositorios')
+            ->where('id_proyecto', $id)
+            ->where('proveedor', 'github')
+            ->whereNull('deleted_at')
+            ->orderBy('id_proyecto_repositorio')
+            ->pluck('url_repositorio')
+            ->filter()
+            ->values();
+
+        $tecnologias = DB::table('uso_tecnologias as ut')
+            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+            ->where('ut.id_proyecto', $id)
+            ->whereNull('ut.deleted_at')
+            ->whereNull('t.deleted_at')
+            ->orderByDesc('ut.es_principal')
+            ->orderBy('t.nombre')
+            ->select('t.id_tecnologia', 't.nombre', 't.tipo', 't.icono_url', 't.color')
+            ->get()
+            ->values();
+
+        $tecnologiaNombres = $tecnologias
+            ->pluck('nombre')
+            ->filter()
+            ->values();
+
+        $participantesCount = DB::table('participaciones')
+            ->where('id_proyecto', $id)
+            ->whereNull('deleted_at')
+            ->count();
+
+        return [
+            ...$project,
+            'id' => $id,
+            'id_proyecto' => $id,
+            'url_repositorios' => $repositorios->all(),
+            'url_repositorio' => $repositorios->first() ?? '',
+            'etiquetas' => $tecnologiaNombres->all(),
+            'tecnologias' => $tecnologiaNombres->all(),
+            'tecnologias_detalle' => $tecnologias->map(fn ($tech) => (array) $tech)->all(),
+            'participantes_count' => $participantesCount,
+            'puede_desvincular_participacion' => $participantesCount > 1,
+            'participacion' => [
+                'rol' => $project['rol'] ?? null,
+                'descripcion_aporte' => $project['descripcion_aporte'] ?? null,
+                'visibilidad' => $project['visibilidad'] ?? 'publico',
+                'fecha_inicio' => $project['part_fecha_inicio'] ?? null,
+                'fecha_fin' => $project['part_fecha_fin'] ?? null,
+            ],
+            'evidencias' => $evidencias,
+        ];
+    }
+
+    private function syncLinkEvidences(int $idProyecto, array $payload): void
+    {
+        $hasDemo = array_key_exists('url_demo', $payload);
+        $hasVideos = array_key_exists('url_videos', $payload);
+
+        if (!$hasDemo && !$hasVideos) {
+            return;
+        }
+
+        DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $idProyecto)
+            ->whereIn('tipo', [self::TIPO_DEMO, self::TIPO_VIDEO])
+            ->whereNull('deleted_at')
+            ->update([
+                'deleted_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+        $insert = [];
+        $now = now();
+
+        $demo = isset($payload['url_demo']) && is_string($payload['url_demo']) ? trim($payload['url_demo']) : '';
+        if ($demo !== '') {
+            $insert[] = [
+                'id_proyecto' => $idProyecto,
+                'titulo' => 'Demo',
+                'descripcion' => null,
+                'tipo' => self::TIPO_DEMO,
+                'url' => $demo,
+                'archivo_path' => null,
+                'mime_type' => null,
+                'tamanio_bytes' => null,
+                'es_portada' => 'false',
+                'es_visible' => 'true',
+                'orden' => 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        $videos = collect($payload['url_videos'] ?? [])
+            ->filter(fn ($v) => is_string($v) && trim($v) !== '')
+            ->values();
+
+        foreach ($videos as $idx => $url) {
+            $insert[] = [
+                'id_proyecto' => $idProyecto,
+                'titulo' => 'Video',
+                'descripcion' => null,
+                'tipo' => self::TIPO_VIDEO,
+                'url' => trim($url),
+                'archivo_path' => null,
+                'mime_type' => null,
+                'tamanio_bytes' => null,
+                'es_portada' => 'false',
+                'es_visible' => 'true',
+                'orden' => $idx,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (!empty($insert)) {
+            DB::table('proyecto_evidencias')->insert($insert);
+        }
+    }
+
+    private function syncProjectRepositories(int $userId, int $idProyecto, array $payload): void
+    {
+        if (! array_key_exists('url_repositorios', $payload)) {
+            return;
+        }
+
+        DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $idProyecto)
+            ->where('tipo', self::TIPO_REPOS)
+            ->whereNull('deleted_at')
+            ->update([
+                'deleted_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+        $result = $this->githubRepositorySyncService->syncProjectRepoUrlsForUsuario(
+            $userId,
+            $idProyecto,
+            $payload['url_repositorios'] ?? [],
+        );
+
+        if (($result['status'] ?? 'error') !== 'success') {
+            abort($result['http_status'] ?? 422, $result['message'] ?? 'No se pudieron validar los repositorios.');
+        }
+    }
+
+    private function syncProjectTechnologies(int $userId, int $idProyecto, array $payload): void
+    {
+        $hasEtiquetas = array_key_exists('etiquetas', $payload);
+        $hasTecnologias = array_key_exists('tecnologias', $payload);
+        $hasRepos = array_key_exists('url_repositorios', $payload);
+
+        if (! $hasEtiquetas && ! $hasTecnologias && ! $hasRepos) {
+            return;
+        }
+
+        $manuales = collect($payload['tecnologias'] ?? $payload['etiquetas'] ?? []);
+        $detectadas = $manuales->isEmpty()
+            ? $this->detectTechnologiesFromRepositories($userId, $payload['url_repositorios'] ?? [])
+            : [];
+
+        $nombres = $manuales
+            ->merge($detectadas)
+            ->map(fn ($value) => is_string($value) ? trim($value) : '')
+            ->filter()
+            ->unique(fn ($value) => Str::lower($value))
+            ->values();
+
+        if ($nombres->isEmpty()) {
+            DB::table('uso_tecnologias')
+                ->where('id_proyecto', $idProyecto)
+                ->whereNull('deleted_at')
+                ->update([
+                    'deleted_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            return;
+        }
+
+        $ids = [];
+
+        foreach ($nombres as $index => $nombre) {
+            $resultado = $this->tecnologiaService->agregarPorNombre($nombre);
+            $tecnologia = $resultado['tecnologia'] ?? null;
+
+            if (! $tecnologia?->id_tecnologia) {
+                continue;
+            }
+
+            $ids[] = (int) $tecnologia->id_tecnologia;
+
+            DB::table('uso_tecnologias')->updateOrInsert(
+                [
+                    'id_proyecto' => $idProyecto,
+                    'id_tecnologia' => (int) $tecnologia->id_tecnologia,
+                ],
+                [
+                    'version_usada' => null,
+                    'porcentaje_uso' => null,
+                    'es_principal' => $index < 3 ? 'true' : 'false',
+                    'es_visible' => 'true',
+                    'deleted_at' => null,
+                    'updated_at' => now(),
+                    'created_at' => now(),
+                ]
+            );
+        }
+
+        DB::table('uso_tecnologias')
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->when(! empty($ids), fn ($query) => $query->whereNotIn('id_tecnologia', $ids))
+            ->update([
+                'deleted_at' => now(),
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function detectTechnologiesFromRepositories(int $userId, array $repoUrls): array
+    {
+        $technologies = [];
+
+        foreach ($repoUrls as $repoUrl) {
+            if (! is_string($repoUrl) || trim($repoUrl) === '') {
+                continue;
+            }
+
+            $result = $this->githubRepositorySyncService->fetchRepoLanguagesForUsuario($userId, $repoUrl);
+
+            if (($result['status'] ?? null) !== 'success' || ! is_array($result['languages'] ?? null)) {
+                continue;
+            }
+
+            $technologies = array_merge($technologies, $result['languages']);
+        }
+
+        return $technologies;
+    }
+
+    private function mapPlataforma(?string $value): string
+    {
+        $map = [
+            'web' => 'web',
+            'movil' => 'movil',
+            'mobile' => 'movil',
+            'escritorio' => 'escritorio',
+            'desktop' => 'escritorio',
+            'web_movil' => 'web_movil',
+            'api' => 'api_backend',
+            'api_backend' => 'api_backend',
+            'otro' => 'otro',
+        ];
+
+        $key = Str::lower(trim((string) $value));
+        return $map[$key] ?? 'sin_especificar';
+    }
+
+    private function mapCategoria(?string $value): string
+    {
+        $valid = [
+            'sin_especificar', 'portafolio', 'educativo', 'financiero', 'ecommerce', 'marketplace',
+            'videojuego', 'salud', 'administrativo', 'red_social', 'dashboard_bi',
+            'gestion_empresarial', 'productividad', 'seguridad', 'entretenimiento',
+            'herramienta_desarrollo', 'otro',
+        ];
+
+        $key = Str::lower(trim((string) $value));
+        return in_array($key, $valid, true) ? $key : 'sin_especificar';
+    }
+
+    private function mapEstadoPublicacion(?string $value): string
+    {
+        $key = Str::lower(trim((string) $value));
+        return match ($key) {
+            'publicado' => 'publicado',
+            'archivado' => 'archivado',
+            default => 'borrador',
+        };
+    }
+
+    private function mapEstadoDesarrollo(?string $value): string
+    {
+        $key = Str::lower(trim((string) $value));
+        return match ($key) {
+            'desarrollo', 'en_desarrollo' => 'en_desarrollo',
+            'terminado' => 'terminado',
+            'mantenimiento' => 'mantenimiento',
+            'versionado' => 'versionado',
+            'pausado' => 'pausado',
+            'cancelado' => 'cancelado',
+            default => 'sin_especificar',
+        };
+    }
+
+    private function normalizeStoragePathFromUrl(string $url): ?string
+    {
+        $path = parse_url($url, PHP_URL_PATH);
+        if (!is_string($path) || trim($path) === '') {
+            return null;
+        }
+
+        if (str_starts_with($path, '/storage/')) {
+            return ltrim(Str::after($path, '/storage/'), '/');
+        }
+
+        return ltrim($path, '/');
+    }
+
+    private function uploadProjectFileToSupabase($file, string $folder): array
+    {
+        $bucket = env('SUPABASE_BUCKET');
+        $urlBase = env('SUPABASE_URL');
+        $key = env('SUPABASE_KEY');
+
+        if (! $bucket || ! $urlBase || ! $key) {
+            abort(500, 'Supabase Storage no esta configurado.');
+        }
+
+        $extension = $file->getClientOriginalExtension() ?: $file->extension() ?: 'bin';
+        $path = trim($folder, '/') . '/' . Str::uuid() . '.' . $extension;
+        $content = file_get_contents($file->getRealPath());
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => rtrim($urlBase, '/') . '/storage/v1/object/' . $bucket . '/' . $path,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $content,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'apikey: ' . $key,
+                'Content-Type: ' . ($file->getMimeType() ?: 'application/octet-stream'),
+            ],
+        ]);
+
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($error || $status >= 400) {
+            abort(502, 'Error al subir archivo a Supabase Storage.');
+        }
+
+        return [
+            'path' => $path,
+            'url' => rtrim($urlBase, '/') . '/storage/v1/object/public/' . $bucket . '/' . $path,
+            'response' => $response,
+        ];
+    }
+
+    private function deleteProjectFile(?string $path, ?string $url = null): void
+    {
+        $bucket = env('SUPABASE_BUCKET');
+        $urlBase = env('SUPABASE_URL');
+        $key = env('SUPABASE_KEY');
+
+        if (! $bucket || ! $urlBase || ! $key) {
+            return;
+        }
+
+        $storagePath = trim((string) $path);
+
+        if ($storagePath === '' && $url) {
+            $prefix = rtrim($urlBase, '/') . '/storage/v1/object/public/' . $bucket . '/';
+            $storagePath = str_starts_with($url, $prefix)
+                ? substr($url, strlen($prefix))
+                : '';
+        }
+
+        if ($storagePath === '') {
+            return;
+        }
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => rtrim($urlBase, '/') . '/storage/v1/object/' . $bucket . '/' . ltrim($storagePath, '/'),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'DELETE',
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'apikey: ' . $key,
+            ],
+        ]);
+
+        curl_exec($ch);
+        curl_close($ch);
+    }
+}
