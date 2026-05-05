@@ -7,6 +7,7 @@ use App\Models\Usuario;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 
 class UsuarioController extends Controller
@@ -113,5 +114,29 @@ class UsuarioController extends Controller
         return response()->json([
             'message' => 'Usuario eliminado correctamente',
         ]);
+    }
+
+    public function cambiarPassword(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'password_actual'      => ['required', 'string'],
+            'password_nueva'       => ['required', 'string', 'min:6', 'confirmed'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Datos inválidos', 'errors' => $validator->errors()], 422);
+        }
+
+        /** @var \App\Models\Usuario $usuario */
+        $usuario = $request->user();
+
+        if (! Hash::check($request->password_actual, $usuario->password)) {
+            return response()->json(['message' => 'La contraseña actual es incorrecta.'], 401);
+        }
+
+        $usuario->password = Hash::make($request->password_nueva);
+        $usuario->save();
+
+        return response()->json(['message' => 'Contraseña actualizada correctamente.']);
     }
 }
