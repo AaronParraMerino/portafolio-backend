@@ -12,6 +12,7 @@ class HomePortfolioService
 {
     private const DEFAULT_LIMIT = 6;
     private const SKILLS_LIMIT = 3;
+    private const EXPERIENCES_LIMIT = 3;
 
     public function getFeaturedPortfolios(int $limit = self::DEFAULT_LIMIT): array
     {
@@ -19,14 +20,21 @@ class HomePortfolioService
 
         return [
             'ultimas_actualizaciones' => $this->recentlyUpdated($limit),
-            'mas_proyectos' => [],
+            'mas_proyectos' => $this->topProjects($limit),
             'mas_experiencia' => $this->rankedBy('total_experiencias', $limit),
             'mas_habilidades' => $this->rankedBy('total_habilidades', $limit),
             'meta' => [
                 'proyectos_disponibles' => false,
-                'mensaje_proyectos' => 'El modelo de proyectos no existe en el backend actual.',
+                'mensaje_proyectos' => 'Este bloque se activara cuando existan proyectos publicos disponibles.',
             ],
         ];
+    }
+
+    private function topProjects(int $limit): array
+    {
+        // Punto de integracion HU-06: cuando exista una tabla/modelo de proyectos publicos,
+        // conectar aqui el agregado por usuario y alimentar total_proyectos en basePortfolioQuery().
+        return [];
     }
 
     public function getPublicPortfolio(int $userId): ?array
@@ -82,14 +90,13 @@ class HomePortfolioService
             ->selectRaw('COUNT(*) AS total_experiencias')
             ->selectRaw('MAX(fecha_modificacion) AS experiencias_actualizadas')
             ->whereRaw('es_publico = true')
-            ->where('tipo', 'laboral')
             ->groupBy('usuario_id');
 
         $skillTotals = DB::table('habilidades_usuario')
             ->join('habilidades', 'habilidades.id_habilidad', '=', 'habilidades_usuario.habilidad_id')
             ->select('habilidades_usuario.usuario_id')
             ->selectRaw('COUNT(*) AS total_habilidades')
-            ->selectRaw('MAX(habilidades_usuario.fecha_modificacion) AS habilidades_actualizadas')
+            ->selectRaw('MAX(COALESCE(habilidades_usuario.fecha_modificacion, habilidades_usuario.updated_at, habilidades_usuario.created_at)) AS habilidades_actualizadas')
             ->whereRaw('habilidades_usuario.es_visible = true')
             ->whereRaw('habilidades.estado = true')
             ->groupBy('habilidades_usuario.usuario_id');
@@ -147,12 +154,19 @@ class HomePortfolioService
 
     private function mapPortfolios(Collection $users): array
     {
-        $skillsByUser = $this->featuredSkills($users->pluck('id_usuario')->all());
+        $userIds = $users->pluck('id_usuario')->all();
+        $skillsByUser = $this->featuredSkills($userIds);
+        $experiencesByUser = $this->featuredExperiences($userIds);
 
-        return $users->map(function ($user) use ($skillsByUser) {
+        return $users->map(function ($user) use ($skillsByUser, $experiencesByUser) {
             $updatedAt = $this->parseDate($user->ultima_actividad)
                 ?? $this->parseDate($user->perfil_actualizado)
                 ?? $this->parseDate($user->usuario_actualizado);
+
+            $skills = $skillsByUser[$user->id_usuario] ?? [];
+            $experiences = $experiencesByUser[$user->id_usuario] ?? [];
+            $totalSkills = (int) $user->total_habilidades;
+            $totalExperiences = (int) $user->total_experiencias;
 
             return [
                 'id_usuario' => (int) $user->id_usuario,
@@ -165,10 +179,13 @@ class HomePortfolioService
                 'ciudad' => $user->ciudad,
                 'pais' => $user->pais,
                 'total_proyectos' => (int) $user->total_proyectos,
-                'total_experiencias' => (int) $user->total_experiencias,
-                'total_habilidades' => (int) $user->total_habilidades,
+                'total_experiencias' => $totalExperiences,
+                'total_habilidades' => $totalSkills,
                 'fecha_ultima_actualizacion' => $updatedAt?->toIso8601String(),
-                'skills_destacadas' => $skillsByUser[$user->id_usuario] ?? [],
+                'skills_destacadas' => $skills,
+                'habilidades_restantes' => max(0, $totalSkills - count($skills)),
+                'experiencias_destacadas' => $experiences,
+                'experiencias_restantes' => max(0, $totalExperiences - count($experiences)),
                 'ruta_portafolio' => '/portfolio/' . $user->id_usuario,
             ];
         })->values()->all();
@@ -195,6 +212,48 @@ class HomePortfolioService
                 return $items->take(self::SKILLS_LIMIT)
                     ->map(fn ($item) => $item->habilidad?->nombre)
                     ->filter()
+                    ->values()
+                    ->all();
+            })
+            ->all();
+    }
+
+    private function featuredExperiences(array $userIds): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        return DB::table('experiencias')
+            ->select([
+                'usuario_id',
+                'id_experiencia',
+                'institucion',
+                'cargo',
+                'descripcion',
+                'fecha_inicio',
+                'fecha_fin',
+                'es_actual',
+            ])
+            ->whereIn('usuario_id', $userIds)
+            ->whereRaw('es_publico = true')
+            ->orderByDesc('fecha_inicio')
+            ->orderByDesc('id_experiencia')
+            ->get()
+            ->groupBy('usuario_id')
+            ->map(function ($items) {
+                return $items->take(self::EXPERIENCES_LIMIT)
+                    ->map(function ($item) {
+                        return [
+                            'id_experiencia' => (int) $item->id_experiencia,
+                            'institucion' => $item->institucion,
+                            'cargo' => $item->cargo,
+                            'descripcion' => $item->descripcion,
+                            'fecha_inicio' => $item->fecha_inicio ? Carbon::parse($item->fecha_inicio)->format('Y-m-d') : null,
+                            'fecha_fin' => $item->fecha_fin ? Carbon::parse($item->fecha_fin)->format('Y-m-d') : null,
+                            'es_actual' => (bool) $item->es_actual,
+                        ];
+                    })
                     ->values()
                     ->all();
             })
