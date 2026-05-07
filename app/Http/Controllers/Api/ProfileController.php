@@ -78,6 +78,26 @@ class ProfileController
         );
     }
 
+    public function updatePortfolioVisibility(Request $request, int $userId)
+    {
+        $user = auth()->user();
+
+        if ($user->id_usuario != $userId) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $request->validate([
+            'portfolio_publico' => 'required|boolean'
+        ]);
+
+        return response()->json(
+            $this->service->updatePortfolioVisibility(
+                $userId,
+                filter_var($request->portfolio_publico, FILTER_VALIDATE_BOOLEAN)
+            )
+        );
+    }
+
     /**
      * Controller para manejar la subida de imágenes de perfil y banner.
      */

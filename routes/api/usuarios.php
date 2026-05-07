@@ -11,4 +11,5 @@ Route::middleware('auth:sanctum')->prefix('usuarios')->group(function () {
     Route::post('/', [UsuarioController::class, 'store']);
     Route::put('/{id}', [UsuarioController::class, 'update']);
     Route::delete('/{id}', [UsuarioController::class, 'destroy']);
+    Route::post('/cambiar-password', [UsuarioController::class, 'cambiarPassword']);
 });
