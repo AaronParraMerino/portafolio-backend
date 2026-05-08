@@ -50,15 +50,10 @@ public function search(array $f, int $perPage = 12)
         $q->whereRaw('COALESCE(p.total, 0) > 0');
     }
 
-    // ── IDs FINALISTAS 
-    $this->applyFechaDesdeFilter($q, $f);
+    //IDs FINALISTAS 
     $idsFinalistas = (clone $q)->pluck('usuarios.id_usuario')->toArray();
 
-    /*if (empty($idsFinalistas)) {
-        return $q->paginate($perPage);
-    }*/
-
-    // ── SUBQUERIES SIN FILTRO (solo finalistas)
+    //SUBQUERIES SIN FILTRO (solo finalistas)
     if (!$tieneHabilidades) {
         $q->leftJoinSub($this->subHabilidadesSinFiltro($idsFinalistas, $f), 'h',
             fn($j) => $j->on('h.usuario_id', '=', 'usuarios.id_usuario'));
@@ -111,7 +106,7 @@ public function search(array $f, int $perPage = 12)
         return true;
     }
 
-/* Funcion de filtro general: busca texto en nombre completo, profesión, habilidades y tecnologías de proyectos.
+/* Funcion de filtro general: busca texto en nombre completo, profesión, habilidades y tecnologías de proyectos
 */
     private function applyQueryFilter($q, array $f): void
     {
@@ -151,7 +146,6 @@ public function search(array $f, int $perPage = 12)
 
     /**
      * Subquery de usuario: filtra nombre, ciudad, país y profesión.
-     * Devuelve usuario_id
      */
         private function applyUsuarioFilter($q, array $f): void
     {
@@ -492,7 +486,7 @@ public function search(array $f, int $perPage = 12)
 
     private function applyPriorityOrdering($q, array $o, string $dir, array $f): void
     {
-        // 1. Si el usuario activó una priorización explícita, esa manda
+        // Si el usuario activó una priorización explícita, esa manda
         if (!empty($o['priorizar_proyectos'])) {
             $q->orderByRaw("COALESCE(p.total, 0) {$dir}");
             return;
@@ -508,7 +502,7 @@ public function search(array $f, int $perPage = 12)
             return;
         }
 
-        // 2. Si todas las priorizaciones son false,
+        // Si todas las priorizaciones son false,
         // se prioriza automáticamente según los filtros enviados
         $tieneUsuario     = $this->tieneValores(data_get($f, 'usuario'));
         $tieneHabilidades = $this->tieneValores(data_get($f, 'habilidades'));
@@ -553,6 +547,7 @@ public function search(array $f, int $perPage = 12)
         )));
     }
    
+    //funcion auxiliar para normalizar arrays de filtros de enums (reemplaza espacios por guiones bajos)
      private function normalizeEnum(array $arr): array
     {
         return array_map(
