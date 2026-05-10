@@ -13,6 +13,8 @@ Route::prefix('profile')->middleware('auth:sanctum')->group(function () {
 
     Route::patch('{userId}/visibility', [ProfileController::class, 'updateVisibility']);
 
+    Route::patch('{userId}/portfolio-visibility', [ProfileController::class, 'updatePortfolioVisibility']);
+
     
     Route::post('{userId}/image', [ProfileController::class, 'uploadImage']);
 

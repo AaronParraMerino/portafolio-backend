@@ -1,0 +1,23 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\ProyectoController;
+
+Route::prefix('projects')->middleware('auth:sanctum')->group(function () {
+    Route::get('/usuario/{userId}', [ProyectoController::class, 'indexByUsuario']);
+    Route::get('/{id}', [ProyectoController::class, 'show']);
+    Route::post('/', [ProyectoController::class, 'store']);
+    Route::put('/{id}', [ProyectoController::class, 'update']);
+    Route::delete('/{id}', [ProyectoController::class, 'destroy']);
+    Route::delete('/{id}/participation', [ProyectoController::class, 'detachParticipation']);
+
+    Route::patch('/{id}/links', [ProyectoController::class, 'updateLinks']);
+
+    Route::post('/{id}/images', [ProyectoController::class, 'uploadImages']);
+    Route::delete('/{id}/images', [ProyectoController::class, 'deleteImages']);
+    Route::patch('/{id}/images/reorder', [ProyectoController::class, 'reorderImages']);
+
+    Route::post('/{id}/documents', [ProyectoController::class, 'uploadDocuments']);
+    Route::delete('/{id}/documents', [ProyectoController::class, 'deleteDocuments']);
+    Route::patch('/{id}/documents/reorder', [ProyectoController::class, 'reorderDocuments']);
+});

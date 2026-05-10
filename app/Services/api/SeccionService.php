@@ -3,7 +3,9 @@
 namespace App\Services\api;
 
 use App\Models\SesionBase;
+use Laravel\Sanctum\PersonalAccessToken;
 use Illuminate\Support\Str;
+use Illuminate\Support\Collection;
 
 class SeccionService
 {
@@ -64,6 +66,80 @@ class SeccionService
         $sesion->save();
 
         return $sesion;
+    }
+
+    public function listActiveByUser(int $usuarioId, ?int $currentTokenId = null): Collection
+    {
+        return SesionBase::query()
+            ->where('usuario_id', $usuarioId)
+            ->whereNotNull('personal_access_token_id')
+            ->orderByDesc('ultima_actividad')
+            ->get()
+            ->map(function (SesionBase $sesion) use ($currentTokenId) {
+                return [
+                    'id_rastreo_interno' => $sesion->id_rastreo_interno,
+                    'session_token' => $sesion->session_token,
+                    'ip_address' => $sesion->ip_address,
+                    'pais_codigo' => $sesion->pais_codigo,
+                    'navegador_nombre' => $sesion->navegador_nombre,
+                    'navegador_version' => $sesion->navegador_version,
+                    'sistema_operativo' => $sesion->sistema_operativo,
+                    'es_movil' => (bool) $sesion->es_movil,
+                    'ultima_actividad' => $sesion->ultima_actividad,
+                    'personal_access_token_id' => (int) $sesion->personal_access_token_id,
+                    'is_current' => $currentTokenId !== null
+                        && (int) $sesion->personal_access_token_id === $currentTokenId,
+                ];
+            });
+    }
+
+    public function closeSessionByIdForUser(int $sesionId, int $usuarioId, ?int $currentTokenId = null): string
+    {
+        $sesion = SesionBase::query()
+            ->where('id_rastreo_interno', $sesionId)
+            ->where('usuario_id', $usuarioId)
+            ->whereNotNull('personal_access_token_id')
+            ->first();
+
+        if (! $sesion) {
+            return 'not_found';
+        }
+
+        $tokenId = (int) $sesion->personal_access_token_id;
+
+        if ($currentTokenId !== null && $tokenId === $currentTokenId) {
+            return 'current_session';
+        }
+
+        PersonalAccessToken::query()->where('id', $tokenId)->delete();
+
+        return 'closed';
+    }
+
+    public function closeOtherSessionsForUser(int $usuarioId, ?int $currentTokenId = null): int
+    {
+        $query = SesionBase::query()
+            ->where('usuario_id', $usuarioId)
+            ->whereNotNull('personal_access_token_id');
+
+        if ($currentTokenId !== null) {
+            $query->where('personal_access_token_id', '!=', $currentTokenId);
+        }
+
+        $tokenIds = $query
+            ->pluck('personal_access_token_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (count($tokenIds) === 0) {
+            return 0;
+        }
+
+        return PersonalAccessToken::query()
+            ->whereIn('id', $tokenIds)
+            ->delete();
     }
 
     private function normalizeBooleanFields(array $data): array

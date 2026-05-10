@@ -1,0 +1,562 @@
+<?php
+
+namespace App\Services\api;
+
+use App\Models\Tecnologia;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+class TecnologiaService
+{
+    public function listar()
+    {
+        return Tecnologia::select('nombre', 'tipo')
+            ->orderBy('nombre')
+            ->get();
+    }
+
+    public function obtenerPorNombre(string $nombre): ?Tecnologia
+    {
+        return $this->buscarTecnologiaFlexible($nombre);
+    }
+
+    public function agregarPorNombre(string $nombre, ?string $tipo = null): array
+    {
+        $nombreBuscado = trim($nombre);
+
+        $existente = $this->buscarTecnologiaFlexible($nombreBuscado, true);
+
+        if ($existente) {
+            if ($existente->trashed()) {
+                $existente->restore();
+            }
+
+            return [
+                'creado' => false,
+                'tecnologia' => $existente->fresh(),
+            ];
+        }
+
+        $datos = $this->buscarDatosExternos($nombreBuscado);
+
+        if ($tipo !== null) {
+            $datos['tipo'] = $tipo;
+        }
+
+        if (! empty($datos['icono_url'])) {
+            $datos['icono_url'] = $this->subirIconoALaravelStorage(
+                $datos['icono_url'],
+                'tecnologias'
+            );
+        }
+
+        $tecnologia = Tecnologia::create($datos);
+
+        return [
+            'creado' => true,
+            'tecnologia' => $tecnologia,
+        ];
+    }
+
+    public function actualizarPorNombre(string $nombre, array $datos): ?Tecnologia
+    {
+        $tecnologia = $this->buscarTecnologiaFlexible($nombre);
+
+        if (! $tecnologia) {
+            return null;
+        }
+
+        if (! empty($datos['icono_url'])) {
+            $datos['icono_url'] = $this->subirIconoALaravelStorage(
+                $datos['icono_url'],
+                'tecnologias'
+            );
+        }
+
+        $tecnologia->update($datos);
+
+        return $tecnologia->fresh();
+    }
+
+    public function eliminarPorNombre(string $nombre): bool
+    {
+        $tecnologia = $this->buscarTecnologiaFlexible($nombre);
+
+        if (! $tecnologia) {
+            return false;
+        }
+
+        $tecnologia->delete();
+
+        return true;
+    }
+
+    private function buscarTecnologiaFlexible(string $nombre, bool $conEliminados = false): ?Tecnologia
+    {
+        $query = $conEliminados
+            ? Tecnologia::withTrashed()
+            : Tecnologia::query();
+
+        $nombreTrim = trim($nombre);
+        $normalizado = $this->normalizar($nombreTrim);
+        $alias = $this->normalizar($this->aliasTecnologia($nombreTrim));
+
+        $exacta = (clone $query)
+            ->whereRaw('LOWER(nombre) = ?', [strtolower($nombreTrim)])
+            ->first();
+
+        if ($exacta) {
+            return $exacta;
+        }
+
+        return $query->get()->first(function ($tecnologia) use ($normalizado, $alias) {
+            $nombreTecnologia = $this->normalizar($tecnologia->nombre);
+
+            return $nombreTecnologia === $normalizado || $nombreTecnologia === $alias;
+        });
+    }
+
+    private function buscarDatosExternos(string $nombre): array
+    {
+        $nombreBusqueda = $this->aliasTecnologia($nombre);
+
+        $devicon = $this->buscarEnDevicon($nombreBusqueda);
+        $simpleIcon = $this->buscarEnSimpleIcons($nombreBusqueda);
+        $githubTopic = $this->buscarEnGithubTopics($nombreBusqueda);
+
+        $nombreFinal = $githubTopic['display_name']
+            ?? $simpleIcon['title']
+            ?? $devicon['name']
+            ?? $this->formatearNombreBasico($nombre);
+
+        $iconoUrl = null;
+
+        if ($devicon) {
+            $iconoUrl = $this->crearIconoDevicon($devicon);
+        }
+
+        if (! $iconoUrl && $simpleIcon) {
+            $iconoUrl = "https://cdn.simpleicons.org/{$simpleIcon['slug']}";
+        }
+
+        if (! $iconoUrl) {
+            $iconoUrl = $this->buscarIconoEnGoogle($nombreFinal);
+        }
+
+        $color = $this->normalizarColor($simpleIcon['hex'] ?? null)
+            ?? $this->normalizarColor($devicon['color'] ?? null);
+
+        $descripcion = $githubTopic['short_description']
+            ?? $githubTopic['description']
+            ?? 'Tecnología relacionada con el desarrollo de software.';
+
+        $tipo = $this->obtenerTipoDesdeFuentes($devicon, $simpleIcon, $githubTopic);
+
+        return [
+            'nombre' => $nombreFinal,
+            'tipo' => $tipo,
+            'icono_url' => $iconoUrl,
+            'color' => $color,
+            'descripcion' => $descripcion,
+        ];
+    }
+
+    private function subirIconoALaravelStorage(string $imageUrl, string $carpeta): ?string
+    {
+        try {
+            $imageResponse = Http::timeout(15)->get($imageUrl);
+
+            if (! $imageResponse->ok()) {
+                return $imageUrl;
+            }
+
+            $contentType = $imageResponse->header('Content-Type') ?: 'image/svg+xml';
+            $extension = $this->obtenerExtensionDesdeContentType($contentType);
+
+            $path = $this->localPrefixForType($carpeta) . '/' . Str::uuid() . '.' . $extension;
+
+            Storage::disk($this->imageDisk())->put($path, $imageResponse->body());
+
+            return asset(Storage::url($path));
+        } catch (\Throwable $e) {
+            return $imageUrl;
+        }
+    }
+
+    private function imageDisk(): string
+    {
+        return env('IMAGE_STORAGE_DISK', 'public');
+    }
+
+    private function localPrefixForType(string $carpeta): string
+    {
+        return trim(env('IMAGE_LOCAL_PREFIX', 'imagenes'), '/') . '/' . trim($carpeta, '/');
+    }
+
+    private function buscarEnDevicon(string $nombre): ?array
+    {
+        $items = Cache::remember('devicon_json', now()->addDay(), function () {
+            $response = Http::timeout(15)->get(
+                'https://raw.githubusercontent.com/devicons/devicon/master/devicon.json'
+            );
+
+            return $response->successful() ? $response->json() : [];
+        });
+
+        $normalizado = $this->normalizar($nombre);
+
+        /*
+        |--------------------------------------------------------------------------
+        | 1. Primero buscar coincidencia exacta por name
+        |--------------------------------------------------------------------------
+        | Esto evita errores como que "Laravel" devuelva "Filament"
+        | solo porque Filament tenga Laravel en sus tags.
+        */
+        foreach ($items as $item) {
+            if ($this->normalizar($item['name'] ?? '') === $normalizado) {
+                return $item;
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | 2. Luego buscar por nombres alternativos
+        |--------------------------------------------------------------------------
+        */
+        foreach ($items as $item) {
+            foreach (($item['altnames'] ?? []) as $altname) {
+                if ($this->normalizar($altname) === $normalizado) {
+                    return $item;
+                }
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | 3. Al final buscar por tags
+        |--------------------------------------------------------------------------
+        */
+        foreach ($items as $item) {
+            foreach (($item['tags'] ?? []) as $tag) {
+                if ($this->normalizar($tag) === $normalizado) {
+                    return $item;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function buscarEnSimpleIcons(string $nombre): ?array
+    {
+        $data = Cache::remember('simple_icons_json', now()->addDay(), function () {
+            $response = Http::timeout(15)->get(
+                'https://cdn.jsdelivr.net/npm/simple-icons@latest/_data/simple-icons.json'
+            );
+
+            return $response->successful() ? $response->json() : [];
+        });
+
+        $icons = $data['icons'] ?? [];
+
+        if (empty($icons) && array_is_list($data)) {
+            $icons = $data;
+        }
+
+        $normalizado = $this->normalizar($nombre);
+
+        foreach ($icons as $icon) {
+            $titulo = $icon['title'] ?? '';
+            $slug = $icon['slug'] ?? $this->crearSlugSimpleIcon($titulo);
+
+            if (
+                $this->normalizar($titulo) === $normalizado ||
+                $this->normalizar($slug) === $normalizado ||
+                str_starts_with($this->normalizar($titulo), $normalizado)
+            ) {
+                return [
+                    'title' => $titulo,
+                    'slug' => $slug,
+                    'hex' => $icon['hex'] ?? null,
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    private function buscarEnGithubTopics(string $nombre): ?array
+    {
+        $headers = [
+            'Accept' => 'application/vnd.github+json',
+            'X-GitHub-Api-Version' => '2022-11-28',
+            'User-Agent' => 'portafolio-tecnologias-api',
+        ];
+
+        $token = config('services.github.token');
+
+        $request = Http::timeout(15)->withHeaders($headers);
+
+        if ($token) {
+            $request = $request->withToken($token);
+        }
+
+        $response = $request->get('https://api.github.com/search/topics', [
+            'q' => $nombre,
+            'per_page' => 5,
+        ]);
+
+        if (! $response->successful()) {
+            return null;
+        }
+
+        $items = $response->json('items') ?? [];
+
+        if (count($items) === 0) {
+            return null;
+        }
+
+        $normalizado = $this->normalizar($nombre);
+
+        foreach ($items as $item) {
+            if (
+                $this->normalizar($item['name'] ?? '') === $normalizado ||
+                $this->normalizar($item['display_name'] ?? '') === $normalizado
+            ) {
+                return $item;
+            }
+        }
+
+        return $items[0];
+    }
+
+    private function buscarIconoEnGoogle(string $nombre): ?string
+    {
+        $apiKey = env('GOOGLE_SEARCH_API_KEY');
+        $engineId = env('GOOGLE_SEARCH_ENGINE_ID');
+
+        if (! $apiKey || ! $engineId) {
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(15)->get('https://www.googleapis.com/customsearch/v1', [
+                'key' => $apiKey,
+                'cx' => $engineId,
+                'q' => $nombre . ' technology logo svg',
+                'searchType' => 'image',
+                'num' => 1,
+            ]);
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $items = $response->json('items') ?? [];
+
+            return $items[0]['link'] ?? null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private function crearIconoDevicon(?array $devicon): ?string
+    {
+        if (! $devicon) {
+            return null;
+        }
+
+        $slug = $devicon['name'] ?? null;
+        $versionesSvg = $devicon['versions']['svg'] ?? [];
+
+        if (! $slug || count($versionesSvg) === 0) {
+            return null;
+        }
+
+        $preferencias = [
+            'original',
+            'plain',
+            'line',
+            'original-wordmark',
+            'plain-wordmark',
+        ];
+
+        foreach ($preferencias as $version) {
+            if (in_array($version, $versionesSvg)) {
+                return "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/{$slug}/{$slug}-{$version}.svg";
+            }
+        }
+
+        $version = $versionesSvg[0];
+
+        return "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/{$slug}/{$slug}-{$version}.svg";
+    }
+
+    private function obtenerTipoDesdeFuentes(?array $devicon, ?array $simpleIcon, ?array $githubTopic): string
+    {
+        $texto = '';
+
+        if ($devicon) {
+            $texto .= ' ' . ($devicon['name'] ?? '');
+            $texto .= ' ' . implode(' ', $devicon['tags'] ?? []);
+            $texto .= ' ' . implode(' ', $devicon['altnames'] ?? []);
+        }
+
+        if ($simpleIcon) {
+            $texto .= ' ' . ($simpleIcon['title'] ?? '');
+        }
+
+        if ($githubTopic) {
+            $texto .= ' ' . ($githubTopic['name'] ?? '');
+            $texto .= ' ' . ($githubTopic['display_name'] ?? '');
+            $texto .= ' ' . ($githubTopic['short_description'] ?? '');
+            $texto .= ' ' . ($githubTopic['description'] ?? '');
+        }
+
+        $texto = $this->normalizarTextoTipo($texto);
+
+        if (str_contains($texto, 'programming language') || str_contains($texto, 'language')) {
+            return 'lenguaje';
+        }
+
+        if (str_contains($texto, 'framework')) {
+            return 'framework';
+        }
+
+        if (str_contains($texto, 'library')) {
+            return 'libreria';
+        }
+
+        if (str_contains($texto, 'database') || str_contains($texto, 'sql')) {
+            return 'base_datos';
+        }
+
+        if (str_contains($texto, 'tool')) {
+            return 'herramienta';
+        }
+
+        if (
+            str_contains($texto, 'cloud') ||
+            str_contains($texto, 'service') ||
+            str_contains($texto, 'api') ||
+            str_contains($texto, 'hosting')
+        ) {
+            return 'servicio';
+        }
+
+        if (str_contains($texto, 'platform')) {
+            return 'plataforma';
+        }
+
+        return 'otro';
+    }
+
+    private function aliasTecnologia(string $nombre): string
+    {
+        $normalizado = $this->normalizar($nombre);
+
+        $aliases = [
+            'vue' => 'vuejs',
+            'vuejs' => 'vuejs',
+            'vue3' => 'vuejs',
+
+            'node' => 'nodejs',
+            'nodejs' => 'nodejs',
+
+            'next' => 'nextjs',
+            'nextjs' => 'nextjs',
+
+            'nuxt' => 'nuxtjs',
+            'nuxtjs' => 'nuxtjs',
+
+            'nest' => 'nestjs',
+            'nestjs' => 'nestjs',
+
+            'postgres' => 'postgresql',
+            'postgresql' => 'postgresql',
+
+            'reactnative' => 'react',
+            'reactjs' => 'react',
+
+            'js' => 'javascript',
+            'ts' => 'typescript',
+
+            'tailwind' => 'tailwindcss',
+            'tailwindcss' => 'tailwindcss',
+        ];
+
+        return $aliases[$normalizado] ?? $nombre;
+    }
+
+    private function obtenerExtensionDesdeContentType(string $contentType): string
+    {
+        $contentType = strtolower(explode(';', $contentType)[0]);
+
+        return match ($contentType) {
+            'image/svg+xml' => 'svg',
+            'image/png' => 'png',
+            'image/jpeg' => 'jpg',
+            'image/jpg' => 'jpg',
+            'image/webp' => 'webp',
+            default => 'svg',
+        };
+    }
+
+    private function normalizarTextoTipo(string $valor): string
+    {
+        return Str::of($valor)
+            ->lower()
+            ->ascii()
+            ->replace(['-', '_', '.', '/', '\\'], ' ')
+            ->squish()
+            ->toString();
+    }
+
+    private function normalizar(string $valor): string
+    {
+        return Str::of($valor)
+            ->lower()
+            ->ascii()
+            ->replaceMatches('/[^a-z0-9]/', '')
+            ->toString();
+    }
+
+    private function crearSlugSimpleIcon(string $titulo): string
+    {
+        return Str::of($titulo)
+            ->lower()
+            ->ascii()
+            ->replaceMatches('/[^a-z0-9]/', '')
+            ->toString();
+    }
+
+    private function formatearNombreBasico(string $nombre): string
+    {
+        return Str::of($nombre)
+            ->replace('-', ' ')
+            ->replace('_', ' ')
+            ->title()
+            ->toString();
+    }
+
+    private function normalizarColor(?string $color): ?string
+    {
+        if (! $color) {
+            return null;
+        }
+
+        $color = trim($color);
+
+        if ($color === '') {
+            return null;
+        }
+
+        if (! str_starts_with($color, '#')) {
+            $color = "#{$color}";
+        }
+
+        return $color;
+    }
+}

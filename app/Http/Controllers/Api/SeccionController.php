@@ -206,5 +206,84 @@ class SeccionController extends Controller
             'data' => $hardware,
         ], 200);
     }
+
+    public function mySessions(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (! $user) {
+            return response()->json([
+                'message' => 'No autenticado',
+            ], 401);
+        }
+
+        $currentTokenId = $user->currentAccessToken()?->id;
+
+        $sessions = $this->seccionService->listActiveByUser(
+            (int) $user->id_usuario,
+            $currentTokenId ? (int) $currentTokenId : null
+        );
+
+        return response()->json([
+            'message' => 'Sesiones activas obtenidas correctamente',
+            'data' => $sessions,
+        ], 200);
+    }
+
+    public function closeSession(Request $request, int $id): JsonResponse
+    {
+        $user = $request->user();
+
+        if (! $user) {
+            return response()->json([
+                'message' => 'No autenticado',
+            ], 401);
+        }
+
+        $status = $this->seccionService->closeSessionByIdForUser(
+            $id,
+            (int) $user->id_usuario,
+            $user->currentAccessToken()?->id
+        );
+
+        if ($status === 'not_found') {
+            return response()->json([
+                'message' => 'Sesion no encontrada',
+            ], 404);
+        }
+
+        if ($status === 'current_session') {
+            return response()->json([
+                'message' => 'No puedes cerrar la sesion actual desde este endpoint',
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => 'Sesion cerrada correctamente',
+        ], 200);
+    }
+
+    public function closeOtherSessions(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (! $user) {
+            return response()->json([
+                'message' => 'No autenticado',
+            ], 401);
+        }
+
+        $closedCount = $this->seccionService->closeOtherSessionsForUser(
+            (int) $user->id_usuario,
+            $user->currentAccessToken()?->id
+        );
+
+        return response()->json([
+            'message' => 'Sesiones cerradas correctamente',
+            'data' => [
+                'cerradas' => $closedCount,
+            ],
+        ], 200);
+    }
     
 }
