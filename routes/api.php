@@ -16,6 +16,7 @@ require __DIR__.'/api/experiencias.php';
 require __DIR__.'/api/habilidades.php';
 
 require __DIR__.'/api/enlaces.php';
+require __DIR__.'/api/home.php';
 
 ################# apis portafolio ############################
 require __DIR__.'/api/portfolio.php';
