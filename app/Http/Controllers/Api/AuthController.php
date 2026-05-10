@@ -80,6 +80,20 @@ class AuthController extends Controller
                 'message' => 'Usuario bloqueado',
             ], 403);
         }
+
+        if ($result['status'] === 'inactive') {
+            return response()->json([
+                'status' => 'inactive_account',
+                'message' => 'Esta cuenta fue desactivada. Puedes restablecerla con un codigo enviado a tu correo.',
+                'correo' => $result['correo'] ?? $data['correo'],
+            ], 403);
+        }
+
+        if ($result['status'] === 'paused') {
+            return response()->json([
+                'message' => 'Usuario pausado',
+            ], 403);
+        }
         
         $sessionToken = $data['session_token'] ?? $request->cookie('foliToken');
 
@@ -145,6 +159,18 @@ class AuthController extends Controller
 
     if ($result['status'] === 'blocked') {
         return response()->json(['message' => 'Usuario bloqueado'], 403);
+    }
+
+    if ($result['status'] === 'inactive') {
+        return response()->json([
+            'status' => 'inactive_account',
+            'message' => 'Esta cuenta fue desactivada. Puedes restablecerla con un codigo enviado a tu correo.',
+            'correo' => $result['correo'] ?? null,
+        ], 403);
+    }
+
+    if ($result['status'] === 'paused') {
+        return response()->json(['message' => 'Usuario pausado'], 403);
     }
 
     if ($result['status'] === 'provider_conflict') {
@@ -569,6 +595,18 @@ public function oauthCallback(string $provider, Request $request): \Illuminate\H
 
     if ($result['status'] === 'blocked') {
         return redirect($frontendUrl . '/auth/login?oauth_error=blocked');
+    }
+
+    if ($result['status'] === 'inactive') {
+        $params = http_build_query([
+            'oauth_error' => 'inactive',
+            'correo' => $result['correo'] ?? '',
+        ]);
+        return redirect($frontendUrl . '/auth/login?' . $params);
+    }
+
+    if ($result['status'] === 'paused') {
+        return redirect($frontendUrl . '/auth/login?oauth_error=paused');
     }
 
     if ($result['status'] === 'provider_conflict') {

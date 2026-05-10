@@ -12,6 +12,11 @@ use Illuminate\Support\Str;
 
 class AuthService
 {
+    public function __construct(
+        private readonly SeccionService $seccionService,
+    ) {
+    }
+
     public function register(array $data): array
     {
         $data['password'] = Hash::make($data['password']);
@@ -50,6 +55,19 @@ class AuthService
             ];
         }
 
+        if ($usuario->estado === 'inactivo') {
+            return [
+                'status' => 'inactive',
+                'correo' => $usuario->correo,
+            ];
+        }
+
+        if ($usuario->estado === 'pausado') {
+            return [
+                'status' => 'paused',
+            ];
+        }
+
         $newToken = $usuario->createToken('auth_token');
 
         return [
@@ -62,7 +80,16 @@ class AuthService
 
     public function logout(Usuario $usuario): void
     {
-        $usuario->currentAccessToken()?->delete();
+        $currentToken = $usuario->currentAccessToken();
+
+        if (! $currentToken) {
+            return;
+        }
+
+        $this->seccionService->clearAuthLinksByTokenIds([$currentToken->id]);
+
+        $currentToken->delete();
+        
     }
 
     public function loginWithGoogle(string $idToken): array
@@ -333,19 +360,27 @@ private function findOrCreateOAuthUser(
                           ->where('provider_user_id', $providerId)
                           ->first();
 
-    if ($cuenta) {
-        if ($usuarioByEmail && $usuarioByEmail->id_usuario !== $cuenta->usuario_id) {
-            return ['status' => 'already_linked'];
-        }
+        if ($cuenta) {
+            if ($usuarioByEmail && $usuarioByEmail->id_usuario !== $cuenta->usuario_id) {
+                return ['status' => 'already_linked'];
+            }
 
-        $usuario = $cuenta->usuario;
+            $usuario = $cuenta->usuario;
 
-        $cuenta->update($this->buildOauthAccountPayload($provider, $email, $nombre, $fotoUrl, $oauthMeta));
-    } else {
-        $usuario = $usuarioByEmail;
+            if ($usuario->estado === 'inactivo') {
+                return ['status' => 'inactive', 'correo' => $usuario->correo];
+            }
 
-        if ($usuario) {
-            $existingProviderLink = CuentaOauth::where('usuario_id', $usuario->id_usuario)
+            $cuenta->update($this->buildOauthAccountPayload($provider, $email, $nombre, $fotoUrl, $oauthMeta));
+        } else {
+            $usuario = $usuarioByEmail;
+
+            if ($usuario) {
+                if ($usuario->estado === 'inactivo') {
+                    return ['status' => 'inactive', 'correo' => $usuario->correo];
+                }
+
+                $existingProviderLink = CuentaOauth::where('usuario_id', $usuario->id_usuario)
                 ->where('provider', $provider)
                 ->first();
 
@@ -400,6 +435,14 @@ private function findOrCreateOAuthUser(
 
     if ($usuario->estado === 'bloqueado') {
         return ['status' => 'blocked'];
+    }
+
+    if ($usuario->estado === 'inactivo') {
+        return ['status' => 'inactive', 'correo' => $usuario->correo];
+    }
+
+    if ($usuario->estado === 'pausado') {
+        return ['status' => 'paused'];
     }
 
     $newToken = $usuario->createToken('auth_token');
