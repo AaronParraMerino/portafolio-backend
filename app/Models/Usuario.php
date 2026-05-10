@@ -2,12 +2,13 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 
 class Usuario extends Authenticatable
 {
-    use HasApiTokens;
+    use HasApiTokens, HasFactory;
 
     protected $table = 'usuarios';
     protected $primaryKey = 'id_usuario';
@@ -59,5 +60,20 @@ class Usuario extends Authenticatable
     public function cuentasOauth()
     {
         return $this->hasMany(CuentaOauth::class, 'usuario_id', 'id_usuario');
+    }
+
+    public function habilidadesUsuario()
+    {
+        return $this->hasMany(HabilidadUsuario::class, 'usuario_id', 'id_usuario');
+    }
+
+    public function enlaces()
+    {
+        return $this->hasMany(Enlace::class, 'id_usuario', 'id_usuario');
+    }
+
+    public function personalizacionPortafolio()
+    {
+        return $this->hasOne(PersonalizacionPortafolio::class, 'usuario_id', 'id_usuario');
     }
 }

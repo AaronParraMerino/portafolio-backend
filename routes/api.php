@@ -11,9 +11,20 @@ require __DIR__.'/api/recuperacion.php';
 ############# datos tabla usuario ##########
 require __DIR__.'/api/usuarios.php';
 require __DIR__.'/api/profile.php';
-require __DIR__.'/api/experiencias.php';
 
-#############################################
+require __DIR__.'/api/experiencias.php';
+require __DIR__.'/api/habilidades.php';
+
+require __DIR__.'/api/enlaces.php';
+
+################# apis portafolio ############################
+require __DIR__.'/api/portfolio.php';
+require __DIR__.'/api/tecnologia.php';
+require __DIR__.'/api/proyectos.php';
+
+################# apis para busqueda ############################
+require __DIR__.'/api/busqueda.php';
+#############################################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
     return response()->json([
