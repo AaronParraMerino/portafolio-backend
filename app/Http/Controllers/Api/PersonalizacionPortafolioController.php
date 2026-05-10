@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\api\PersonalizacionPortafolioService;
+use App\Services\api\PortafolioPublicoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -11,8 +12,20 @@ use Illuminate\Validation\Rule;
 class PersonalizacionPortafolioController extends Controller
 {
     public function __construct(
-        private readonly PersonalizacionPortafolioService $service
+        private readonly PersonalizacionPortafolioService $service,
+        private readonly PortafolioPublicoService $publicService
     ) {
+    }
+
+    public function publicView(int $userId): JsonResponse
+    {
+        $portafolio = $this->publicService->getByUser($userId);
+
+        if (! $portafolio) {
+            return response()->json(['message' => 'Portafolio no disponible'], 404);
+        }
+
+        return response()->json(['data' => $portafolio]);
     }
 
     public function show(int $userId): JsonResponse
