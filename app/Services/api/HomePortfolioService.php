@@ -186,7 +186,7 @@ class HomePortfolioService
                 'habilidades_restantes' => max(0, $totalSkills - count($skills)),
                 'experiencias_destacadas' => $experiences,
                 'experiencias_restantes' => max(0, $totalExperiences - count($experiences)),
-                'ruta_portafolio' => '/portfolio/' . $user->id_usuario,
+                'ruta_portafolio' => '/portafolio/' . $user->id_usuario,
             ];
         })->values()->all();
     }
