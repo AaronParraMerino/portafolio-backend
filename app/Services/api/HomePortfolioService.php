@@ -13,6 +13,7 @@ class HomePortfolioService
     private const DEFAULT_LIMIT = 6;
     private const SKILLS_LIMIT = 3;
     private const EXPERIENCES_LIMIT = 3;
+    private const PROJECTS_LIMIT = 3;
 
     public function getFeaturedPortfolios(int $limit = self::DEFAULT_LIMIT): array
     {
@@ -24,17 +25,14 @@ class HomePortfolioService
             'mas_experiencia' => $this->rankedBy('total_experiencias', $limit),
             'mas_habilidades' => $this->rankedBy('total_habilidades', $limit),
             'meta' => [
-                'proyectos_disponibles' => false,
-                'mensaje_proyectos' => 'Este bloque se activara cuando existan proyectos publicos disponibles.',
+                'proyectos_disponibles' => true,
             ],
         ];
     }
 
     private function topProjects(int $limit): array
     {
-        // Punto de integracion HU-06: cuando exista una tabla/modelo de proyectos publicos,
-        // conectar aqui el agregado por usuario y alimentar total_proyectos en basePortfolioQuery().
-        return [];
+        return $this->rankedBy('total_proyectos', $limit);
     }
 
     public function getPublicPortfolio(int $userId): ?array
@@ -73,6 +71,10 @@ class HomePortfolioService
             $query->whereRaw('COALESCE(habilidades_publicas.total_habilidades, 0) > 0');
         }
 
+        if ($field === 'total_proyectos') {
+            $query->whereRaw('COALESCE(proyectos_publicos.total_proyectos, 0) > 0');
+        }
+
         $users = $query
             ->orderByDesc($field)
             ->orderByDesc('ultima_actividad')
@@ -101,6 +103,18 @@ class HomePortfolioService
             ->whereRaw('habilidades.estado = true')
             ->groupBy('habilidades_usuario.usuario_id');
 
+        $projectTotals = DB::table('participaciones')
+            ->join('proyectos', 'proyectos.id_proyecto', '=', 'participaciones.id_proyecto')
+            ->select('participaciones.id_usuario')
+            ->selectRaw('COUNT(*) AS total_proyectos')
+            ->selectRaw('MAX(GREATEST(proyectos.updated_at, participaciones.updated_at)) AS proyectos_actualizados')
+            ->where('participaciones.visibilidad', 'publico')
+            ->whereIn('participaciones.estado_participacion', ['activo', 'finalizado'])
+            ->where('proyectos.estado_publicacion', '!=', 'archivado')
+            ->whereNull('participaciones.deleted_at')
+            ->whereNull('proyectos.deleted_at')
+            ->groupBy('participaciones.id_usuario');
+
         return Usuario::query()
             ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
             ->leftJoin('visibilidad_campos as vis_profesion', function ($join) {
@@ -125,6 +139,9 @@ class HomePortfolioService
             ->leftJoinSub($skillTotals, 'habilidades_publicas', function ($join) {
                 $join->on('habilidades_publicas.usuario_id', '=', 'usuarios.id_usuario');
             })
+            ->leftJoinSub($projectTotals, 'proyectos_publicos', function ($join) {
+                $join->on('proyectos_publicos.id_usuario', '=', 'usuarios.id_usuario');
+            })
             ->where('usuarios.estado', 'activo')
             ->whereRaw('perfiles.es_publico = true')
             ->select([
@@ -141,13 +158,14 @@ class HomePortfolioService
             ->selectRaw('CASE WHEN COALESCE(vis_pais.visible, false) = true THEN perfiles.pais ELSE NULL END AS pais')
             ->selectRaw('COALESCE(experiencias_publicas.total_experiencias, 0) AS total_experiencias')
             ->selectRaw('COALESCE(habilidades_publicas.total_habilidades, 0) AS total_habilidades')
-            ->selectRaw('0 AS total_proyectos')
+            ->selectRaw('COALESCE(proyectos_publicos.total_proyectos, 0) AS total_proyectos')
             ->selectRaw("
                 GREATEST(
                     COALESCE(usuarios.updated_at, '1970-01-01'),
                     COALESCE(perfiles.updated_at, '1970-01-01'),
                     COALESCE(experiencias_publicas.experiencias_actualizadas, '1970-01-01'),
-                    COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01')
+                    COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01'),
+                    COALESCE(proyectos_publicos.proyectos_actualizados, '1970-01-01')
                 ) AS ultima_actividad
             ");
     }
@@ -157,16 +175,19 @@ class HomePortfolioService
         $userIds = $users->pluck('id_usuario')->all();
         $skillsByUser = $this->featuredSkills($userIds);
         $experiencesByUser = $this->featuredExperiences($userIds);
+        $projectsByUser = $this->featuredProjects($userIds);
 
-        return $users->map(function ($user) use ($skillsByUser, $experiencesByUser) {
+        return $users->map(function ($user) use ($skillsByUser, $experiencesByUser, $projectsByUser) {
             $updatedAt = $this->parseDate($user->ultima_actividad)
                 ?? $this->parseDate($user->perfil_actualizado)
                 ?? $this->parseDate($user->usuario_actualizado);
 
             $skills = $skillsByUser[$user->id_usuario] ?? [];
             $experiences = $experiencesByUser[$user->id_usuario] ?? [];
+            $projects = $projectsByUser[$user->id_usuario] ?? [];
             $totalSkills = (int) $user->total_habilidades;
             $totalExperiences = (int) $user->total_experiencias;
+            $totalProjects = (int) $user->total_proyectos;
 
             return [
                 'id_usuario' => (int) $user->id_usuario,
@@ -178,7 +199,7 @@ class HomePortfolioService
                 'resumen' => $user->biografia,
                 'ciudad' => $user->ciudad,
                 'pais' => $user->pais,
-                'total_proyectos' => (int) $user->total_proyectos,
+                'total_proyectos' => $totalProjects,
                 'total_experiencias' => $totalExperiences,
                 'total_habilidades' => $totalSkills,
                 'fecha_ultima_actualizacion' => $updatedAt?->toIso8601String(),
@@ -186,6 +207,8 @@ class HomePortfolioService
                 'habilidades_restantes' => max(0, $totalSkills - count($skills)),
                 'experiencias_destacadas' => $experiences,
                 'experiencias_restantes' => max(0, $totalExperiences - count($experiences)),
+                'proyectos_destacados' => $projects,
+                'proyectos_restantes' => max(0, $totalProjects - count($projects)),
                 'ruta_portafolio' => '/portfolio/' . $user->id_usuario,
             ];
         })->values()->all();
@@ -257,6 +280,81 @@ class HomePortfolioService
                     ->values()
                     ->all();
             })
+            ->all();
+    }
+
+    private function featuredProjects(array $userIds): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        $projects = DB::table('participaciones')
+            ->join('proyectos', 'proyectos.id_proyecto', '=', 'participaciones.id_proyecto')
+            ->select([
+                'participaciones.id_usuario',
+                'proyectos.id_proyecto',
+                'proyectos.titulo',
+                'proyectos.descripcion',
+                'proyectos.categoria_proyecto',
+                'proyectos.plataforma_objetivo',
+                'proyectos.fecha_inicio',
+                'proyectos.fecha_fin',
+                'proyectos.updated_at',
+            ])
+            ->whereIn('participaciones.id_usuario', $userIds)
+            ->where('participaciones.visibilidad', 'publico')
+            ->whereIn('participaciones.estado_participacion', ['activo', 'finalizado'])
+            ->where('proyectos.estado_publicacion', '!=', 'archivado')
+            ->whereNull('participaciones.deleted_at')
+            ->whereNull('proyectos.deleted_at')
+            ->orderByDesc('proyectos.es_destacado')
+            ->orderByDesc('proyectos.updated_at')
+            ->orderByDesc('proyectos.id_proyecto')
+            ->get();
+
+        $projectIds = $projects->pluck('id_proyecto')->all();
+        $technologiesByProject = $this->projectTechnologies($projectIds);
+
+        return $projects
+            ->groupBy('id_usuario')
+            ->map(function ($items) use ($technologiesByProject) {
+                return $items->take(self::PROJECTS_LIMIT)
+                    ->map(function ($item) use ($technologiesByProject) {
+                        return [
+                            'id_proyecto' => (int) $item->id_proyecto,
+                            'titulo' => $item->titulo,
+                            'descripcion' => $item->descripcion,
+                            'categoria_proyecto' => $item->categoria_proyecto,
+                            'plataforma_objetivo' => $item->plataforma_objetivo,
+                            'fecha_inicio' => $item->fecha_inicio ? Carbon::parse($item->fecha_inicio)->format('Y-m-d') : null,
+                            'fecha_fin' => $item->fecha_fin ? Carbon::parse($item->fecha_fin)->format('Y-m-d') : null,
+                            'tecnologias' => $technologiesByProject[$item->id_proyecto] ?? [],
+                        ];
+                    })
+                    ->values()
+                    ->all();
+            })
+            ->all();
+    }
+
+    private function projectTechnologies(array $projectIds): array
+    {
+        if (empty($projectIds)) {
+            return [];
+        }
+
+        return DB::table('uso_tecnologias')
+            ->join('tecnologias', 'tecnologias.id_tecnologia', '=', 'uso_tecnologias.id_tecnologia')
+            ->whereIn('uso_tecnologias.id_proyecto', $projectIds)
+            ->whereRaw('uso_tecnologias.es_visible = true')
+            ->whereNull('uso_tecnologias.deleted_at')
+            ->whereNull('tecnologias.deleted_at')
+            ->orderByDesc('uso_tecnologias.es_principal')
+            ->orderBy('tecnologias.nombre')
+            ->get(['uso_tecnologias.id_proyecto', 'tecnologias.nombre'])
+            ->groupBy('id_proyecto')
+            ->map(fn ($items) => $items->pluck('nombre')->filter()->take(3)->values()->all())
             ->all();
     }
 
