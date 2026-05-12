@@ -7,6 +7,7 @@ use App\Models\Usuario;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class HomePortfolioService
 {
@@ -14,9 +15,21 @@ class HomePortfolioService
     private const SKILLS_LIMIT = 3;
     private const EXPERIENCES_LIMIT = 3;
 
-    public function getFeaturedPortfolios(int $limit = self::DEFAULT_LIMIT): array
+    public function getFeaturedPortfolios(int $limit = self::DEFAULT_LIMIT, ?string $search = null): array
     {
         $limit = max(1, min($limit, 12));
+        $search = trim((string) $search);
+
+        if ($search !== '') {
+            return [
+                'resultados_busqueda' => $this->searchRanked($search, $limit),
+                'meta' => [
+                    'modo' => 'busqueda',
+                    'termino' => $search,
+                    'prioridad' => 'coincidencia > proyectos > experiencias > habilidades > recencia',
+                ],
+            ];
+        }
 
         return [
             'ultimas_actualizaciones' => $this->recentlyUpdated($limit),
@@ -24,17 +37,15 @@ class HomePortfolioService
             'mas_experiencia' => $this->rankedBy('total_experiencias', $limit),
             'mas_habilidades' => $this->rankedBy('total_habilidades', $limit),
             'meta' => [
-                'proyectos_disponibles' => false,
-                'mensaje_proyectos' => 'Este bloque se activara cuando existan proyectos publicos disponibles.',
+                'modo' => 'destacados',
+                'proyectos_disponibles' => true,
             ],
         ];
     }
 
     private function topProjects(int $limit): array
     {
-        // Punto de integracion HU-06: cuando exista una tabla/modelo de proyectos publicos,
-        // conectar aqui el agregado por usuario y alimentar total_proyectos en basePortfolioQuery().
-        return [];
+        return $this->rankedBy('total_proyectos', $limit);
     }
 
     public function getPublicPortfolio(int $userId): ?array
@@ -65,6 +76,10 @@ class HomePortfolioService
     {
         $query = $this->basePortfolioQuery();
 
+        if ($field === 'total_proyectos') {
+            $query->whereRaw('COALESCE(proyectos_publicos.total_proyectos, 0) > 0');
+        }
+
         if ($field === 'total_experiencias') {
             $query->whereRaw('COALESCE(experiencias_publicas.total_experiencias, 0) > 0');
         }
@@ -75,6 +90,29 @@ class HomePortfolioService
 
         $users = $query
             ->orderByDesc($field)
+            ->orderByDesc('ultima_actividad')
+            ->orderBy('usuarios.nombre')
+            ->limit($limit)
+            ->get();
+
+        return $this->mapPortfolios($users);
+    }
+
+    private function searchRanked(string $term, int $limit): array
+    {
+        $normalized = $this->normalizeSearchTerm($term);
+        $like = '%' . $term . '%';
+        $query = $this->basePortfolioQuery();
+
+        $this->applySearchFilter($query, $like, $normalized);
+        $this->addSearchScore($query, $like, $normalized);
+
+        $users = $query
+            ->orderByDesc('score_coincidencia')
+            ->orderByDesc('score_total')
+            ->orderByDesc('total_proyectos')
+            ->orderByDesc('total_experiencias')
+            ->orderByDesc('total_habilidades')
             ->orderByDesc('ultima_actividad')
             ->orderBy('usuarios.nombre')
             ->limit($limit)
@@ -101,6 +139,16 @@ class HomePortfolioService
             ->whereRaw('habilidades.estado = true')
             ->groupBy('habilidades_usuario.usuario_id');
 
+        $projectTotals = DB::table('participaciones as participaciones_publicas')
+            ->join('proyectos as proyectos_publicados', 'proyectos_publicados.id_proyecto', '=', 'participaciones_publicas.id_proyecto')
+            ->select('participaciones_publicas.id_usuario as usuario_id')
+            ->selectRaw('COUNT(DISTINCT proyectos_publicados.id_proyecto) AS total_proyectos')
+            ->selectRaw('MAX(COALESCE(proyectos_publicados.updated_at, participaciones_publicas.updated_at, proyectos_publicados.created_at, participaciones_publicas.created_at)) AS proyectos_actualizados')
+            ->where('participaciones_publicas.visibilidad', 'publico')
+            ->whereNull('participaciones_publicas.deleted_at')
+            ->whereNull('proyectos_publicados.deleted_at')
+            ->groupBy('participaciones_publicas.id_usuario');
+
         return Usuario::query()
             ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
             ->leftJoin('visibilidad_campos as vis_profesion', function ($join) {
@@ -125,6 +173,9 @@ class HomePortfolioService
             ->leftJoinSub($skillTotals, 'habilidades_publicas', function ($join) {
                 $join->on('habilidades_publicas.usuario_id', '=', 'usuarios.id_usuario');
             })
+            ->leftJoinSub($projectTotals, 'proyectos_publicos', function ($join) {
+                $join->on('proyectos_publicos.usuario_id', '=', 'usuarios.id_usuario');
+            })
             ->where('usuarios.estado', 'activo')
             ->whereRaw('perfiles.es_publico = true')
             ->select([
@@ -141,15 +192,302 @@ class HomePortfolioService
             ->selectRaw('CASE WHEN COALESCE(vis_pais.visible, false) = true THEN perfiles.pais ELSE NULL END AS pais')
             ->selectRaw('COALESCE(experiencias_publicas.total_experiencias, 0) AS total_experiencias')
             ->selectRaw('COALESCE(habilidades_publicas.total_habilidades, 0) AS total_habilidades')
-            ->selectRaw('0 AS total_proyectos')
+            ->selectRaw('COALESCE(proyectos_publicos.total_proyectos, 0) AS total_proyectos')
             ->selectRaw("
                 GREATEST(
                     COALESCE(usuarios.updated_at, '1970-01-01'),
                     COALESCE(perfiles.updated_at, '1970-01-01'),
                     COALESCE(experiencias_publicas.experiencias_actualizadas, '1970-01-01'),
-                    COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01')
+                    COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01'),
+                    COALESCE(proyectos_publicos.proyectos_actualizados, '1970-01-01')
                 ) AS ultima_actividad
             ");
+    }
+
+    private function applySearchFilter($query, string $like, string $normalized): void
+    {
+        $query->where(function ($where) use ($like, $normalized) {
+            $where
+                ->whereExists(fn ($sub) => $this->skillMatchQuery($sub, $normalized))
+                ->orWhereExists(fn ($sub) => $this->projectMatchQuery($sub, $like))
+                ->orWhereExists(fn ($sub) => $this->experienceMatchQuery($sub, $like))
+                ->orWhere(function ($profile) use ($like) {
+                    $profile
+                        ->where(function ($field) use ($like) {
+                            $field->whereRaw('COALESCE(vis_profesion.visible, false) = true')
+                                ->where('perfiles.profesion', 'ilike', $like);
+                        })
+                        ->orWhere(function ($field) use ($like) {
+                            $field->whereRaw('COALESCE(vis_biografia.visible, false) = true')
+                                ->where('perfiles.biografia', 'ilike', $like);
+                        })
+                        ->orWhereRaw("LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)", [$like]);
+                });
+        });
+    }
+
+    private function addSearchScore($query, string $like, string $normalized): void
+    {
+        $query
+            ->selectRaw('CASE WHEN EXISTS (
+                SELECT 1
+                FROM habilidades_usuario hu_score
+                INNER JOIN habilidades h_score ON h_score.id_habilidad = hu_score.habilidad_id
+                WHERE hu_score.usuario_id = usuarios.id_usuario
+                    AND hu_score.es_visible = true
+                    AND h_score.estado = true
+                    AND LOWER(h_score.nombre_normalizado) = ?
+            ) THEN 50 ELSE 0 END AS score_habilidad', [$normalized])
+            ->selectRaw('CASE WHEN EXISTS (
+                SELECT 1
+                FROM participaciones par_score
+                INNER JOIN proyectos p_score ON p_score.id_proyecto = par_score.id_proyecto
+                WHERE par_score.id_usuario = usuarios.id_usuario
+                    AND par_score.visibilidad = ?
+                    AND par_score.deleted_at IS NULL
+                    AND p_score.deleted_at IS NULL
+                    AND (
+                        p_score.titulo ILIKE ?
+                        OR p_score.descripcion ILIKE ?
+                        OR p_score.categoria_proyecto ILIKE ?
+                        OR EXISTS (
+                            SELECT 1
+                            FROM uso_tecnologias ut_score
+                            INNER JOIN tecnologias t_score ON t_score.id_tecnologia = ut_score.id_tecnologia
+                            WHERE ut_score.id_proyecto = p_score.id_proyecto
+                                AND ut_score.deleted_at IS NULL
+                                AND t_score.deleted_at IS NULL
+                                AND t_score.nombre ILIKE ?
+                        )
+                    )
+            ) THEN 30 ELSE 0 END AS score_proyecto', ['publico', $like, $like, $like, $like])
+            ->selectRaw('CASE WHEN EXISTS (
+                SELECT 1
+                FROM experiencias ex_score
+                WHERE ex_score.usuario_id = usuarios.id_usuario
+                    AND ex_score.es_publico = true
+                    AND (
+                        ex_score.cargo ILIKE ?
+                        OR ex_score.institucion ILIKE ?
+                        OR ex_score.descripcion ILIKE ?
+                        OR ex_score.tipo ILIKE ?
+                    )
+            ) THEN 20 ELSE 0 END AS score_experiencia', [$like, $like, $like, $like])
+            ->selectRaw("CASE WHEN (
+                (COALESCE(vis_profesion.visible, false) = true AND perfiles.profesion ILIKE ?)
+                OR (COALESCE(vis_biografia.visible, false) = true AND perfiles.biografia ILIKE ?)
+                OR LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)
+            ) THEN 10 ELSE 0 END AS score_perfil", [$like, $like, $like])
+            ->selectRaw("
+                (
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM habilidades_usuario hu_score
+                        INNER JOIN habilidades h_score ON h_score.id_habilidad = hu_score.habilidad_id
+                        WHERE hu_score.usuario_id = usuarios.id_usuario
+                            AND hu_score.es_visible = true
+                            AND h_score.estado = true
+                            AND LOWER(h_score.nombre_normalizado) = ?
+                    ) THEN 50 ELSE 0 END
+                    +
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM participaciones par_score
+                        INNER JOIN proyectos p_score ON p_score.id_proyecto = par_score.id_proyecto
+                        WHERE par_score.id_usuario = usuarios.id_usuario
+                            AND par_score.visibilidad = ?
+                            AND par_score.deleted_at IS NULL
+                            AND p_score.deleted_at IS NULL
+                            AND (
+                                p_score.titulo ILIKE ?
+                                OR p_score.descripcion ILIKE ?
+                                OR p_score.categoria_proyecto ILIKE ?
+                                OR EXISTS (
+                                    SELECT 1
+                                    FROM uso_tecnologias ut_score
+                                    INNER JOIN tecnologias t_score ON t_score.id_tecnologia = ut_score.id_tecnologia
+                                    WHERE ut_score.id_proyecto = p_score.id_proyecto
+                                        AND ut_score.deleted_at IS NULL
+                                        AND t_score.deleted_at IS NULL
+                                        AND t_score.nombre ILIKE ?
+                                )
+                            )
+                    ) THEN 30 ELSE 0 END
+                    +
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM experiencias ex_score
+                        WHERE ex_score.usuario_id = usuarios.id_usuario
+                            AND ex_score.es_publico = true
+                            AND (
+                                ex_score.cargo ILIKE ?
+                                OR ex_score.institucion ILIKE ?
+                                OR ex_score.descripcion ILIKE ?
+                                OR ex_score.tipo ILIKE ?
+                            )
+                    ) THEN 20 ELSE 0 END
+                    +
+                    CASE WHEN (
+                        (COALESCE(vis_profesion.visible, false) = true AND perfiles.profesion ILIKE ?)
+                        OR (COALESCE(vis_biografia.visible, false) = true AND perfiles.biografia ILIKE ?)
+                        OR LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)
+                    ) THEN 10 ELSE 0 END
+                    +
+                    LEAST(COALESCE(proyectos_publicos.total_proyectos, 0) * 2, 20)
+                    +
+                    LEAST(COALESCE(experiencias_publicas.total_experiencias, 0) * 2, 20)
+                    +
+                    LEAST(COALESCE(habilidades_publicas.total_habilidades, 0), 15)
+                    +
+                    CASE
+                        WHEN GREATEST(
+                            COALESCE(usuarios.updated_at, '1970-01-01'),
+                            COALESCE(perfiles.updated_at, '1970-01-01'),
+                            COALESCE(experiencias_publicas.experiencias_actualizadas, '1970-01-01'),
+                            COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01'),
+                            COALESCE(proyectos_publicos.proyectos_actualizados, '1970-01-01')
+                        ) >= NOW() - INTERVAL '7 days' THEN 15
+                        WHEN GREATEST(
+                            COALESCE(usuarios.updated_at, '1970-01-01'),
+                            COALESCE(perfiles.updated_at, '1970-01-01'),
+                            COALESCE(experiencias_publicas.experiencias_actualizadas, '1970-01-01'),
+                            COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01'),
+                            COALESCE(proyectos_publicos.proyectos_actualizados, '1970-01-01')
+                        ) >= NOW() - INTERVAL '30 days' THEN 10
+                        WHEN GREATEST(
+                            COALESCE(usuarios.updated_at, '1970-01-01'),
+                            COALESCE(perfiles.updated_at, '1970-01-01'),
+                            COALESCE(experiencias_publicas.experiencias_actualizadas, '1970-01-01'),
+                            COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01'),
+                            COALESCE(proyectos_publicos.proyectos_actualizados, '1970-01-01')
+                        ) >= NOW() - INTERVAL '90 days' THEN 5
+                        ELSE 0
+                    END
+                ) AS score_total
+            ", [
+                $normalized,
+                'publico', $like, $like, $like, $like,
+                $like, $like, $like, $like,
+                $like, $like, $like,
+            ])
+            ->selectRaw("
+                (
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM habilidades_usuario hu_score
+                        INNER JOIN habilidades h_score ON h_score.id_habilidad = hu_score.habilidad_id
+                        WHERE hu_score.usuario_id = usuarios.id_usuario
+                            AND hu_score.es_visible = true
+                            AND h_score.estado = true
+                            AND LOWER(h_score.nombre_normalizado) = ?
+                    ) THEN 50 ELSE 0 END
+                    +
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM participaciones par_score
+                        INNER JOIN proyectos p_score ON p_score.id_proyecto = par_score.id_proyecto
+                        WHERE par_score.id_usuario = usuarios.id_usuario
+                            AND par_score.visibilidad = ?
+                            AND par_score.deleted_at IS NULL
+                            AND p_score.deleted_at IS NULL
+                            AND (
+                                p_score.titulo ILIKE ?
+                                OR p_score.descripcion ILIKE ?
+                                OR p_score.categoria_proyecto ILIKE ?
+                                OR EXISTS (
+                                    SELECT 1
+                                    FROM uso_tecnologias ut_score
+                                    INNER JOIN tecnologias t_score ON t_score.id_tecnologia = ut_score.id_tecnologia
+                                    WHERE ut_score.id_proyecto = p_score.id_proyecto
+                                        AND ut_score.deleted_at IS NULL
+                                        AND t_score.deleted_at IS NULL
+                                        AND t_score.nombre ILIKE ?
+                                )
+                            )
+                    ) THEN 30 ELSE 0 END
+                    +
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM experiencias ex_score
+                        WHERE ex_score.usuario_id = usuarios.id_usuario
+                            AND ex_score.es_publico = true
+                            AND (
+                                ex_score.cargo ILIKE ?
+                                OR ex_score.institucion ILIKE ?
+                                OR ex_score.descripcion ILIKE ?
+                                OR ex_score.tipo ILIKE ?
+                            )
+                    ) THEN 20 ELSE 0 END
+                    +
+                    CASE WHEN (
+                        (COALESCE(vis_profesion.visible, false) = true AND perfiles.profesion ILIKE ?)
+                        OR (COALESCE(vis_biografia.visible, false) = true AND perfiles.biografia ILIKE ?)
+                        OR LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)
+                    ) THEN 10 ELSE 0 END
+                ) AS score_coincidencia
+            ", [
+                $normalized,
+                'publico', $like, $like, $like, $like,
+                $like, $like, $like, $like,
+                $like, $like, $like,
+            ]);
+    }
+
+    private function skillMatchQuery($query, string $normalized)
+    {
+        return $query
+            ->from('habilidades_usuario as hu_match')
+            ->join('habilidades as h_match', 'h_match.id_habilidad', '=', 'hu_match.habilidad_id')
+            ->whereColumn('hu_match.usuario_id', 'usuarios.id_usuario')
+            ->whereRaw('hu_match.es_visible = true')
+            ->whereRaw('h_match.estado = true')
+            ->whereRaw('LOWER(h_match.nombre_normalizado) = ?', [$normalized]);
+    }
+
+    private function projectMatchQuery($query, string $like)
+    {
+        return $query
+            ->from('participaciones as par_match')
+            ->join('proyectos as p_match', 'p_match.id_proyecto', '=', 'par_match.id_proyecto')
+            ->whereColumn('par_match.id_usuario', 'usuarios.id_usuario')
+            ->where('par_match.visibilidad', 'publico')
+            ->whereNull('par_match.deleted_at')
+            ->whereNull('p_match.deleted_at')
+            ->where(function ($where) use ($like) {
+                $where
+                    ->where('p_match.titulo', 'ilike', $like)
+                    ->orWhere('p_match.descripcion', 'ilike', $like)
+                    ->orWhere('p_match.categoria_proyecto', 'ilike', $like)
+                    ->orWhereExists(function ($sub) use ($like) {
+                        $sub
+                            ->from('uso_tecnologias as ut_match')
+                            ->join('tecnologias as t_match', 't_match.id_tecnologia', '=', 'ut_match.id_tecnologia')
+                            ->whereColumn('ut_match.id_proyecto', 'p_match.id_proyecto')
+                            ->whereNull('ut_match.deleted_at')
+                            ->whereNull('t_match.deleted_at')
+                            ->where('t_match.nombre', 'ilike', $like);
+                    });
+            });
+    }
+
+    private function experienceMatchQuery($query, string $like)
+    {
+        return $query
+            ->from('experiencias as ex_match')
+            ->whereColumn('ex_match.usuario_id', 'usuarios.id_usuario')
+            ->whereRaw('ex_match.es_publico = true')
+            ->where(function ($where) use ($like) {
+                $where
+                    ->where('ex_match.cargo', 'ilike', $like)
+                    ->orWhere('ex_match.institucion', 'ilike', $like)
+                    ->orWhere('ex_match.descripcion', 'ilike', $like)
+                    ->orWhere('ex_match.tipo', 'ilike', $like);
+            });
+    }
+
+    private function normalizeSearchTerm(string $term): string
+    {
+        return Str::lower(Str::ascii(trim(preg_replace('/\s+/', ' ', $term))));
     }
 
     private function mapPortfolios(Collection $users): array
