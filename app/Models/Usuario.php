@@ -71,4 +71,9 @@ class Usuario extends Authenticatable
     {
         return $this->hasMany(Enlace::class, 'id_usuario', 'id_usuario');
     }
+
+    public function personalizacionPortafolio()
+    {
+        return $this->hasOne(PersonalizacionPortafolio::class, 'usuario_id', 'id_usuario');
+    }
 }
