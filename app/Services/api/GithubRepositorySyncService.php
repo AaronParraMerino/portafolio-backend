@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Http;
 
 class GithubRepositorySyncService
 {
-    public function findExistingProjectForValidatedRepoUrls(int $usuarioId, array $repoUrls): ?int
+    public function findExistingProjectForJoinableRepoUrls(int $usuarioId, array $repoUrls): array
     {
         foreach ($repoUrls as $url) {
             if (! is_string($url) || trim($url) === '') {
@@ -47,19 +47,41 @@ class GithubRepositorySyncService
             $validado = UsuarioRepositorioValidacion::query()
                 ->where('id_usuario', $usuarioId)
                 ->where('id_repositorio_github', $repo->github->id_repositorio_github)
-                ->where('validado', $this->dbBool(true))
+                ->whereRaw('validado = TRUE')
                 ->exists();
 
-            if ($validado) {
-                return (int) $repo->id_proyecto;
+            if ($validado || $this->projectAllowsUnvalidatedParticipants((int) $repo->id_proyecto)) {
+                return [
+                    'status' => 'success',
+                    'id_proyecto' => (int) $repo->id_proyecto,
+                    'validado' => $validado,
+                ];
             }
+
+            return [
+                'status' => 'repo_requires_validation',
+                'http_status' => 403,
+                'id_proyecto' => (int) $repo->id_proyecto,
+                'message' => 'Este repositorio ya pertenece a un proyecto que requiere validacion GitHub para unirse.',
+            ];
         }
 
-        return null;
+        return ['status' => 'not_found'];
     }
 
     public function linkUsuarioToExistingProjectByRepo(int $usuarioId, int $idProyecto, array $participacionData = []): array
     {
+        $repos = ProyectoRepositorio::query()
+            ->with('github')
+            ->where('id_proyecto', $idProyecto)
+            ->where('proveedor', 'github')
+            ->get();
+
+        $joinPermission = $this->resolveExistingProjectJoinPermission($usuarioId, $idProyecto, $repos);
+        if (($joinPermission['status'] ?? 'error') !== 'success') {
+            return $joinPermission;
+        }
+
         $participacion = $this->ensureParticipacionForProject($usuarioId, $idProyecto, $participacionData);
         if (! $participacion) {
             return [
@@ -67,12 +89,6 @@ class GithubRepositorySyncService
                 'message' => 'No se encontro el proyecto vinculado al repositorio.',
             ];
         }
-
-        $repos = ProyectoRepositorio::query()
-            ->with('github')
-            ->where('id_proyecto', $idProyecto)
-            ->where('proveedor', 'github')
-            ->get();
 
         $this->syncParticipacionRepositorios($usuarioId, $participacion, $repos);
 
@@ -251,7 +267,7 @@ class GithubRepositorySyncService
             if ($participacion) {
                 $hayValidado = ParticipacionRepositorio::query()
                     ->where('id_participacion', $participacion->id_participacion)
-                    ->where('validado', $this->dbBool(true))
+                    ->whereRaw('validado = TRUE')
                     ->exists();
 
                 DB::table('participaciones')
@@ -274,7 +290,12 @@ class GithubRepositorySyncService
             $saveResult = $this->saveGithubRepoForProject($idProyecto, $validatedRepo['url'], $validatedRepo['repo']);
 
             if (($saveResult['status'] ?? null) === 'linked_existing_project') {
-                $this->linkUsuarioToExistingProjectByRepo($usuarioId, (int) $saveResult['id_proyecto']);
+                $linkResult = $this->linkUsuarioToExistingProjectByRepo($usuarioId, (int) $saveResult['id_proyecto']);
+
+                if (($linkResult['status'] ?? 'error') !== 'success') {
+                    return $linkResult;
+                }
+
                 continue;
             }
 
@@ -581,7 +602,7 @@ class GithubRepositorySyncService
 
             $hayValidado = ParticipacionRepositorio::query()
                 ->where('id_participacion', $participacion->id_participacion)
-                ->where('validado', $this->dbBool(true))
+                ->whereRaw('validado = TRUE')
                 ->exists();
 
             DB::table('participaciones')
@@ -615,7 +636,6 @@ class GithubRepositorySyncService
         $participacion = DB::table('participaciones')
             ->where('id_usuario', $usuarioId)
             ->where('id_proyecto', $idProyecto)
-            ->whereNull('deleted_at')
             ->first();
 
         $data = [
@@ -627,6 +647,7 @@ class GithubRepositorySyncService
                 : ($participacion->descripcion_aporte ?? null),
             'visibilidad' => $participacion->visibilidad ?? 'publico',
             'estado_participacion' => 'activo',
+            'deleted_at' => null,
             'updated_at' => now(),
         ];
 
@@ -687,7 +708,7 @@ class GithubRepositorySyncService
 
         $hayValidado = ParticipacionRepositorio::query()
             ->where('id_participacion', $participacion->id_participacion)
-            ->where('validado', $this->dbBool(true))
+            ->whereRaw('validado = TRUE')
             ->exists();
 
         DB::table('participaciones')
@@ -696,6 +717,56 @@ class GithubRepositorySyncService
                 'participacion_validada' => $this->dbBool($hayValidado),
                 'updated_at' => now(),
             ]);
+    }
+
+    private function resolveExistingProjectJoinPermission(int $usuarioId, int $idProyecto, $repos): array
+    {
+        $projectExists = DB::table('proyectos')
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->exists();
+
+        if (! $projectExists) {
+            return [
+                'status' => 'project_not_found',
+                'message' => 'No se encontro el proyecto vinculado al repositorio.',
+            ];
+        }
+
+        $reposGithubIds = $repos
+            ->map(fn ($repo) => $repo->github?->id_repositorio_github)
+            ->filter()
+            ->values();
+
+        $hasValidatedRepo = $reposGithubIds->isNotEmpty()
+            && UsuarioRepositorioValidacion::query()
+                ->where('id_usuario', $usuarioId)
+                ->whereIn('id_repositorio_github', $reposGithubIds->all())
+                ->whereRaw('validado = TRUE')
+                ->exists();
+
+        if ($hasValidatedRepo || $this->projectAllowsUnvalidatedParticipants($idProyecto)) {
+            return [
+                'status' => 'success',
+                'validado' => $hasValidatedRepo,
+            ];
+        }
+
+        return [
+            'status' => 'repo_requires_validation',
+            'http_status' => 403,
+            'id_proyecto' => $idProyecto,
+            'message' => 'Este repositorio ya pertenece a un proyecto que requiere validacion GitHub para unirse.',
+        ];
+    }
+
+    private function projectAllowsUnvalidatedParticipants(int $idProyecto): bool
+    {
+        $value = DB::table('proyecto_configuraciones')
+            ->where('id_proyecto', $idProyecto)
+            ->value('permitir_participantes_sin_validacion');
+
+        return in_array(strtolower((string) $value), ['1', 't', 'true', 'yes', 'on'], true);
     }
 
     public function syncForUsuario(int $usuarioId): array
