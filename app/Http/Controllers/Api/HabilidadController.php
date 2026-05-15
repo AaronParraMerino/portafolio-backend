@@ -44,12 +44,18 @@ class HabilidadController extends Controller
             ], 422);
         }
 
-        $habilidad = $this->habilidadService->createCatalog($validator->validated());
+        try {
+            $habilidad = $this->habilidadService->createCatalog($validator->validated());
 
-        return response()->json([
-            'message' => 'Habilidad creada correctamente',
-            'data' => $habilidad,
-        ], 201);
+            return response()->json([
+                'message' => 'Habilidad creada correctamente',
+                'data' => $habilidad,
+            ], 201);
+        } catch (\RuntimeException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 
     public function indexUserSkills(int $userId): JsonResponse

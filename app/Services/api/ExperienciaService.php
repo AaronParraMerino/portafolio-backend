@@ -29,7 +29,9 @@ class ExperienciaService
         $data['fecha_modificacion'] = now();
 
         return DB::transaction(function () use ($data) {
-            return Experiencia::create($data);
+            $id = DB::table('experiencias')->insertGetId($data, 'id_experiencia');
+
+            return Experiencia::findOrFail($id);
         });
     }
 
@@ -39,7 +41,10 @@ class ExperienciaService
         $data['fecha_modificacion'] = now();
 
         return DB::transaction(function () use ($experiencia, $data) {
-            $experiencia->update($data);
+            DB::table('experiencias')
+                ->where('id_experiencia', $experiencia->id_experiencia)
+                ->update($data);
+
             return $experiencia->fresh();
         });
     }
@@ -53,15 +58,19 @@ class ExperienciaService
 
     private function normalizeData(array $data): array
     {
+        $esActual = null;
+
         if (array_key_exists('es_actual', $data)) {
-            $data['es_actual'] = filter_var($data['es_actual'], FILTER_VALIDATE_BOOLEAN) ? 'true' : 'false';
+            $esActual = filter_var($data['es_actual'], FILTER_VALIDATE_BOOLEAN);
+            $data['es_actual'] = DB::raw($esActual ? 'true' : 'false');
         }
 
         if (array_key_exists('es_publico', $data)) {
-            $data['es_publico'] = filter_var($data['es_publico'], FILTER_VALIDATE_BOOLEAN) ? 'true' : 'false';
+            $esPublico = filter_var($data['es_publico'], FILTER_VALIDATE_BOOLEAN);
+            $data['es_publico'] = DB::raw($esPublico ? 'true' : 'false');
         }
 
-        if (($data['es_actual'] ?? null) === 'true') {
+        if ($esActual === true) {
             $data['fecha_fin'] = null;
         }
 

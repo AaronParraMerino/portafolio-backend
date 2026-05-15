@@ -4,6 +4,7 @@ namespace App\Services\api;
 
 use App\Models\Habilidad;
 use App\Models\HabilidadUsuario;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 class HabilidadService
@@ -22,16 +23,28 @@ class HabilidadService
     public function createCatalog(array $data): Habilidad
     {
         $nombreNormalizado = $this->normalizeName($data['nombre']);
+        $existing = $this->findExistingCatalogByNormalizedName($nombreNormalizado);
 
-        return Habilidad::firstOrCreate(
-            ['nombre_normalizado' => $nombreNormalizado],
-            [
+        if ($existing) {
+            throw new \RuntimeException(
+                'La habilidad ya existe en el catÃ¡logo como habilidad ' . $existing->tipo . '.'
+            );
+        }
+
+        try {
+            return Habilidad::create([
                 'nombre' => trim($data['nombre']),
                 'nombre_normalizado' => $nombreNormalizado,
                 'tipo' => $data['tipo'],
                 'descripcion' => $data['descripcion'] ?? null,
-            ]
-        );
+            ]);
+        } catch (QueryException $e) {
+            if (($e->errorInfo[0] ?? null) === '23505') {
+                throw new \RuntimeException('La habilidad ya existe en el catÃ¡logo.');
+            }
+
+            throw $e;
+        }
     }
 
     public function getByUserId(int $userId)
@@ -130,8 +143,40 @@ class HabilidadService
     {
         $value = trim($value);
         $value = preg_replace('/\s+/', ' ', $value);
+        $value = $this->removeAccents($value);
+        $value = mb_strtolower($value);
+        $value = preg_replace('/\s*([+#.])\s*/u', '$1', $value);
+        $value = preg_replace('/\.+$/u', '', $value);
 
-        return mb_strtolower($value);
+        return trim(preg_replace('/\s+/', ' ', $value));
+    }
+
+    private function removeAccents(string $value): string
+    {
+        if (class_exists(\Normalizer::class)) {
+            $normalized = \Normalizer::normalize($value, \Normalizer::FORM_D);
+
+            if ($normalized !== false) {
+                return preg_replace('/\p{Mn}+/u', '', $normalized);
+            }
+        }
+
+        $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value);
+
+        return $ascii !== false ? $ascii : $value;
+    }
+
+    private function findExistingCatalogByNormalizedName(string $nombreNormalizado): ?Habilidad
+    {
+        $existing = Habilidad::where('nombre_normalizado', $nombreNormalizado)->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        return Habilidad::query()
+            ->get(['id_habilidad', 'nombre', 'nombre_normalizado', 'tipo'])
+            ->first(fn (Habilidad $habilidad) => $this->normalizeName($habilidad->nombre) === $nombreNormalizado);
     }
 
     private function toPgBool(bool $value): string
