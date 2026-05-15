@@ -23,6 +23,13 @@ class PersonalizacionPortafolio extends Model
         'font_id',
         'frame_id',
         'disponible',
+        'visibilidad',
+    ];
+
+    protected $casts = [
+        'text_color_auto' => 'boolean',
+        'disponible' => 'boolean',
+        'visibilidad' => 'array',
     ];
 
     public function usuario()

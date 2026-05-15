@@ -43,6 +43,8 @@ class ProfileService
             'pais' => $perfil?->pais,
             'foto_perfil' => $perfil?->foto_perfil,
             'foto_fondo' => $perfil?->foto_fondo,
+            'es_publico' => (bool) ($perfil?->es_publico ?? true),
+            'portfolio_publico' => (bool) ($perfil?->es_publico ?? true),
 
             'visibilidad' => [
                 'nombre' => true,
@@ -465,7 +467,6 @@ class ProfileService
         }
     }
 }
-
 
 
 

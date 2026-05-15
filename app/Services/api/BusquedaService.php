@@ -19,6 +19,18 @@ public function search(array $f, int $perPage = 12)
 
     $q = DB::table('usuarios')
         ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
+        ->leftJoin('visibilidad_campos as vis_profesion', function ($join) {
+            $join->on('vis_profesion.usuario_id', '=', 'usuarios.id_usuario')
+                ->whereRaw("vis_profesion.campo = 'profesion'");
+        })
+        ->leftJoin('visibilidad_campos as vis_ciudad', function ($join) {
+            $join->on('vis_ciudad.usuario_id', '=', 'usuarios.id_usuario')
+                ->whereRaw("vis_ciudad.campo = 'ciudad'");
+        })
+        ->leftJoin('visibilidad_campos as vis_pais', function ($join) {
+            $join->on('vis_pais.usuario_id', '=', 'usuarios.id_usuario')
+                ->whereRaw("vis_pais.campo = 'pais'");
+        })
         ->where('usuarios.estado', 'activo')
         ->whereRaw('perfiles.es_publico IS TRUE');
 
@@ -74,10 +86,10 @@ public function search(array $f, int $perPage = 12)
         'usuarios.id_usuario',
         'usuarios.nombre',
         'usuarios.apellido',
-        'perfiles.profesion',
-        'perfiles.ciudad',
-        'perfiles.pais',
         'perfiles.foto_perfil',
+        DB::raw('CASE WHEN COALESCE(vis_profesion.visible, false) = true THEN perfiles.profesion ELSE NULL END AS profesion'),
+        DB::raw('CASE WHEN COALESCE(vis_ciudad.visible, false) = true THEN perfiles.ciudad ELSE NULL END AS ciudad'),
+        DB::raw('CASE WHEN COALESCE(vis_pais.visible, false) = true THEN perfiles.pais ELSE NULL END AS pais'),
         DB::raw('COALESCE(h.total, 0)         AS habilidades_relacionadas'),
         DB::raw("COALESCE(h.tecnologias, '')   AS tecnologias_relacionadas"),
         DB::raw('COALESCE(e.total, 0)          AS experiencias_relacionadas'),
@@ -121,7 +133,10 @@ public function search(array $f, int $perPage = 12)
 
         $q->where(function ($w) use ($texto, $fechaDesde) {
             $w->whereRaw("LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)", [$texto])
-                ->orWhere('perfiles.profesion', 'ilike', $texto)
+                ->orWhere(function ($q) use ($texto) {
+                    $q->whereRaw('COALESCE(vis_profesion.visible, false) = true')
+                        ->where('perfiles.profesion', 'ilike', $texto);
+                })
                 ->orWhereExists(fn($s) => $s
                     ->from('habilidades_usuario as hu')
                     ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
@@ -136,8 +151,10 @@ public function search(array $f, int $perPage = 12)
                     ->join('uso_tecnologias as ut', 'ut.id_proyecto', '=', 'p2.id_proyecto')
                     ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
                     ->whereColumn('par.id_usuario', 'usuarios.id_usuario')
+                    ->where('par.visibilidad', 'publico')
                     ->whereNull('p2.deleted_at')
                     ->whereNull('ut.deleted_at')
+                    ->whereRaw('ut.es_visible IS TRUE')
                     ->where('t.nombre', 'ilike', $texto)
                     ->when($fechaDesde, fn($q) => $q->whereDate('par.fecha_inicio', '>=', $fechaDesde))
                 );
@@ -159,19 +176,22 @@ public function search(array $f, int $perPage = 12)
         }
 
         if (!empty($u['ciudad'])) {
-            $q->whereIn(DB::raw('LOWER(perfiles.ciudad)'), $this->normalize($u['ciudad']));
+            $q->whereRaw('COALESCE(vis_ciudad.visible, false) = true')
+                ->whereIn(DB::raw('LOWER(perfiles.ciudad)'), $this->normalize($u['ciudad']));
         }
 
         if (!empty($u['pais'])) {
-            $q->whereIn(DB::raw('LOWER(perfiles.pais)'), $this->normalize($u['pais']));
+            $q->whereRaw('COALESCE(vis_pais.visible, false) = true')
+                ->whereIn(DB::raw('LOWER(perfiles.pais)'), $this->normalize($u['pais']));
         }
 
         if (!empty($u['profesion'])) {
-            $q->where(function ($w) use ($u) {
-                foreach ($u['profesion'] as $p) {
-                    $w->orWhere('perfiles.profesion', 'ilike', "%{$p}%");
-                }
-            });
+            $q->whereRaw('COALESCE(vis_profesion.visible, false) = true')
+                ->where(function ($w) use ($u) {
+                    foreach ($u['profesion'] as $p) {
+                        $w->orWhere('perfiles.profesion', 'ilike', "%{$p}%");
+                    }
+                });
         }
     }
 
@@ -309,6 +329,7 @@ public function search(array $f, int $perPage = 12)
             ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
             ->select('par.id_usuario as usuario_id', DB::raw('COUNT(*) as total'))
             ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
             ->whereNull('p.deleted_at');
 
         $fechaDesde = $this->fechaDesde($f);
@@ -323,6 +344,7 @@ public function search(array $f, int $perPage = 12)
                     ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
                     ->whereColumn('ut.id_proyecto', 'p.id_proyecto')
                     ->whereNull('ut.deleted_at')
+                    ->whereRaw('ut.es_visible IS TRUE')
                     ->whereIn(DB::raw('LOWER(t.nombre)'), $this->normalize($tecnologias));
             });
         }
@@ -401,8 +423,10 @@ public function search(array $f, int $perPage = 12)
                 DB::raw('LOWER(t.nombre) as clave')
             )
             ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
             ->whereNull('p.deleted_at')
             ->whereNull('ut.deleted_at')
+            ->whereRaw('ut.es_visible IS TRUE')
             ->whereIn('par.id_usuario', $ids);
 
         if ($fechaDesde) {
@@ -458,6 +482,7 @@ public function search(array $f, int $perPage = 12)
             ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
             ->select('par.id_usuario as usuario_id', DB::raw('COUNT(*) as total'))
             ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
             ->whereNull('p.deleted_at')
             ->whereIn('par.id_usuario', $ids);
 
@@ -578,9 +603,14 @@ public function search(array $f, int $perPage = 12)
     {
         return DB::table('perfiles')
             ->join('usuarios', 'usuarios.id_usuario', '=', 'perfiles.usuario_id')
+            ->join('visibilidad_campos as vis_profesion', function ($join) {
+                $join->on('vis_profesion.usuario_id', '=', 'usuarios.id_usuario')
+                    ->whereRaw("vis_profesion.campo = 'profesion'");
+            })
             ->select('perfiles.profesion')
             ->where('usuarios.estado', 'activo')
             ->whereRaw('perfiles.es_publico IS TRUE')
+            ->whereRaw('vis_profesion.visible IS TRUE')
             ->whereNotNull('perfiles.profesion')
             ->where('perfiles.profesion', '<>', '')
             ->distinct()
@@ -626,7 +656,9 @@ public function search(array $f, int $perPage = 12)
             ->join('participaciones as par', 'par.id_proyecto', '=', 'p.id_proyecto')
             ->whereNull('ut.deleted_at')
             ->whereNull('p.deleted_at')
+            ->whereRaw('ut.es_visible IS TRUE')
             ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
             ->distinct()
             ->orderBy('t.nombre')
             ->pluck('t.nombre');
@@ -637,6 +669,7 @@ public function search(array $f, int $perPage = 12)
         return DB::table('proyectos as p')
             ->join('participaciones as par', 'par.id_proyecto', '=', 'p.id_proyecto')
             ->whereNull('p.deleted_at')
+            ->whereNull('par.deleted_at')
             ->where('par.visibilidad', 'publico')
             ->whereNotNull('p.categoria_proyecto')
             ->where('p.categoria_proyecto', '<>', '')

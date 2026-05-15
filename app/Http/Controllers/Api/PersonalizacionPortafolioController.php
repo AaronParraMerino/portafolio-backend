@@ -71,6 +71,17 @@ class PersonalizacionPortafolioController extends Controller
             'frame_id' => ['sometimes', Rule::in(['thick', 'mac', 'linux', 'windows', 'none'])],
             'text_color_auto' => ['sometimes', 'boolean'],
             'disponible' => ['sometimes', 'boolean'],
+            'visibilidad' => ['sometimes', 'array'],
+            'visibilidad.perfil' => ['sometimes', 'array'],
+            'visibilidad.perfil.*' => ['boolean'],
+            'visibilidad.stats' => ['sometimes', 'array'],
+            'visibilidad.stats.*' => ['boolean'],
+            'visibilidad.habilidades' => ['sometimes', 'array'],
+            'visibilidad.habilidades.*' => ['boolean'],
+            'visibilidad.experiencias' => ['sometimes', 'array'],
+            'visibilidad.experiencias.*' => ['boolean'],
+            'visibilidad.proyectos' => ['sometimes', 'array'],
+            'visibilidad.proyectos.*' => ['boolean'],
         ];
     }
 }

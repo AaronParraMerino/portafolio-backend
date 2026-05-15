@@ -20,25 +20,28 @@ class PortafolioPublicoService
             return null;
         }
 
+        $configuracion = $this->personalizacionService->getByUser($userId) ?? [];
+
         return [
-            'perfil' => $this->serializePerfil($usuario),
+            'perfil' => $this->serializePerfil($usuario, $configuracion['visibilidad']['perfil'] ?? []),
             'redes' => $this->getRedes($userId),
             'habilidades' => $this->getHabilidades($userId),
             'experiencias' => $this->getExperiencias($userId),
             'proyectos' => $this->getProyectos($userId),
-            'config' => $this->personalizacionService->getByUser($userId) ?? (object) [],
+            'config' => $configuracion ?: (object) [],
         ];
     }
 
-    private function serializePerfil(Usuario $usuario): array
+    private function serializePerfil(Usuario $usuario, array $configVisibility = []): array
     {
         $perfil = $usuario->perfil;
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
             ->toArray();
 
+        $nombreVisible = $this->visibleFromConfig($configVisibility, 'nombre', true);
         $visibilidad = [
-            'nombre' => true,
+            'nombre' => $nombreVisible,
             'correo' => $this->visible($visibilidadRaw, 'correo'),
             'telefono' => $this->visible($visibilidadRaw, 'telefono'),
             'biografia' => $this->visible($visibilidadRaw, 'biografia'),
@@ -50,8 +53,8 @@ class PortafolioPublicoService
         return [
             'id' => $usuario->id_usuario,
             'id_usuario' => $usuario->id_usuario,
-            'nombre' => $usuario->nombre,
-            'apellido' => $usuario->apellido,
+            'nombre' => $nombreVisible ? $usuario->nombre : null,
+            'apellido' => $nombreVisible ? $usuario->apellido : null,
             'correo' => $visibilidad['correo'] ? $usuario->correo : null,
             'telefono' => $visibilidad['telefono'] ? $usuario->telefono : null,
             'profesion' => $visibilidad['profesion'] ? $perfil?->profesion : null,
@@ -233,6 +236,15 @@ class PortafolioPublicoService
     private function visible(array $visibilidadRaw, string $campo): bool
     {
         return $this->toBoolean($visibilidadRaw[$campo] ?? false);
+    }
+
+    private function visibleFromConfig(array $visibility, string $campo, bool $fallback = true): bool
+    {
+        if (! array_key_exists($campo, $visibility)) {
+            return $fallback;
+        }
+
+        return $this->toBoolean($visibility[$campo], $fallback);
     }
 
     private function toBoolean(mixed $value, bool $fallback = false): bool
