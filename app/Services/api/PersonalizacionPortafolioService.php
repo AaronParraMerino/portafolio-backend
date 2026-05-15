@@ -3,9 +3,43 @@
 namespace App\Services\api;
 
 use App\Models\PersonalizacionPortafolio;
+use Illuminate\Support\Facades\DB;
 
 class PersonalizacionPortafolioService
 {
+    private const PROFILE_FIELDS = [
+        'nombre',
+        'profesion',
+        'ubicacion',
+        'telefono',
+        'correo',
+        'redes',
+        'biografia',
+    ];
+
+    private const STAT_FIELDS = [
+        'proyectos',
+        'tecnologias',
+        'academica',
+        'laboral',
+    ];
+
+    private const PROJECT_DETAIL_FIELDS = [
+        'media',
+        'estado',
+        'tipo',
+        'descripcion',
+        'tecnologias',
+        'repositorios',
+        'demo',
+        'videos',
+        'documentos',
+        'fechas',
+        'rol',
+        'aporte',
+        'participantes',
+    ];
+
     public function getByUser(int $userId): ?array
     {
         $personalizacion = PersonalizacionPortafolio::where('usuario_id', $userId)->first();
@@ -16,26 +50,69 @@ class PersonalizacionPortafolioService
     public function saveForUser(int $userId, array $data): array
     {
         $data = $this->normalizeBooleanFields($data);
+        $hasVisibility = array_key_exists('visibilidad', $data);
 
-        $personalizacion = PersonalizacionPortafolio::where('usuario_id', $userId)->first();
-
-        if ($personalizacion) {
-            $personalizacion->update($data);
-
-            return $this->serialize($personalizacion->fresh());
+        if ($hasVisibility) {
+            $data['visibilidad'] = $this->normalizeVisibility($data['visibilidad']);
         }
 
-        $payload = [
-            'usuario_id' => $userId,
-            ...$this->defaults(),
-            ...$data,
-        ];
+        return DB::transaction(function () use ($userId, $data, $hasVisibility) {
+            $personalizacion = PersonalizacionPortafolio::where('usuario_id', $userId)->first();
 
-        $payload = $this->normalizeBooleanFields($payload);
+            if ($personalizacion) {
+                DB::table('personalizaciones_portafolio')
+                    ->where('id_personalizacion', $personalizacion->id_personalizacion)
+                    ->update($this->toDatabasePayload([
+                        ...$data,
+                        'updated_at' => now(),
+                    ]));
+            } else {
+                $payload = [
+                    'usuario_id' => $userId,
+                    ...$this->defaults(),
+                    ...$data,
+                ];
 
-        $personalizacion = PersonalizacionPortafolio::create($payload);
+                $payload = $this->normalizeBooleanFields($payload);
 
-        return $this->serialize($personalizacion);
+                if (array_key_exists('visibilidad', $payload)) {
+                    $payload['visibilidad'] = $this->normalizeVisibility($payload['visibilidad']);
+                }
+
+                $id = DB::table('personalizaciones_portafolio')
+                    ->insertGetId(
+                        $this->toDatabasePayload([
+                            ...$payload,
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]),
+                        'id_personalizacion'
+                    );
+
+                $personalizacion = PersonalizacionPortafolio::find($id);
+            }
+
+            if ($hasVisibility) {
+                $this->syncVisibilityToContentTables($userId, $data['visibilidad']);
+            }
+
+            return $this->serialize($personalizacion->fresh());
+        });
+    }
+
+    private function toDatabasePayload(array $payload): array
+    {
+        foreach (['text_color_auto', 'disponible'] as $field) {
+            if (array_key_exists($field, $payload)) {
+                $payload[$field] = $this->pgBoolean($payload[$field]);
+            }
+        }
+
+        if (array_key_exists('visibilidad', $payload) && is_array($payload['visibilidad'])) {
+            $payload['visibilidad'] = json_encode($payload['visibilidad']);
+        }
+
+        return $payload;
     }
 
     private function defaults(): array
@@ -43,16 +120,17 @@ class PersonalizacionPortafolioService
         return [
             'hero_color' => '#0c1a2e',
             'hero_bg_source' => 'custom',
-            'hero_pattern' => 'dots',
+            'hero_pattern' => 'none',
             'avatar_bg_source' => 'foto',
             'avatar_color' => '#0c1a2e',
             'accent_color' => '#0077b7',
             'card_bg' => '#ffffff',
-            'text_color_auto' => 'true',
+            'text_color_auto' => true,
             'text_color' => '#111827',
             'font_id' => 'inter',
-            'frame_id' => 'mac',
-            'disponible' => 'false',
+            'frame_id' => 'none',
+            'disponible' => true,
+            'visibilidad' => $this->defaultVisibility(),
         ];
     }
 
@@ -65,11 +143,8 @@ class PersonalizacionPortafolioService
 
             $value = $data[$field];
 
-            if ($value === true || $value === 1 || $value === '1' || $value === 'true') {
-                $data[$field] = 'true';
-            } else {
-                $data[$field] = 'false';
-            }
+            $parsed = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            $data[$field] = $parsed ?? false;
         }
 
         return $data;
@@ -92,6 +167,288 @@ class PersonalizacionPortafolioService
         return false;
     }
 
+    private function pgBoolean(mixed $value)
+    {
+        return DB::raw($this->toBoolean($value) ? 'true' : 'false');
+    }
+
+    private function defaultVisibility(): array
+    {
+        return [
+            'perfil' => [
+                'nombre' => true,
+                'profesion' => true,
+                'ubicacion' => true,
+                'telefono' => true,
+                'correo' => true,
+                'redes' => true,
+                'biografia' => true,
+            ],
+            'stats' => [
+                'proyectos' => true,
+                'tecnologias' => true,
+                'academica' => true,
+                'laboral' => true,
+            ],
+            'habilidades' => [],
+            'experiencias' => [],
+            'proyectos' => [],
+            'proyecto_detalles' => [
+                'media' => true,
+                'estado' => true,
+                'tipo' => true,
+                'descripcion' => true,
+                'tecnologias' => true,
+                'repositorios' => true,
+                'demo' => true,
+                'videos' => true,
+                'documentos' => true,
+                'fechas' => true,
+                'rol' => true,
+                'aporte' => true,
+                'participantes' => true,
+            ],
+        ];
+    }
+
+    private function normalizeVisibility(mixed $visibility): array
+    {
+        if (is_string($visibility)) {
+            $decoded = json_decode($visibility, true);
+            $visibility = is_array($decoded) ? $decoded : [];
+        }
+
+        if (! is_array($visibility)) {
+            $visibility = [];
+        }
+
+        $normalized = $this->defaultVisibility();
+
+        foreach (self::PROFILE_FIELDS as $field) {
+            if (array_key_exists($field, $visibility['perfil'] ?? [])) {
+                $normalized['perfil'][$field] = $this->toBooleanWithFallback(
+                    $visibility['perfil'][$field],
+                    true
+                );
+            }
+        }
+
+        foreach (self::STAT_FIELDS as $field) {
+            if (array_key_exists($field, $visibility['stats'] ?? [])) {
+                $normalized['stats'][$field] = $this->toBooleanWithFallback(
+                    $visibility['stats'][$field],
+                    true
+                );
+            }
+        }
+
+        foreach (self::PROJECT_DETAIL_FIELDS as $field) {
+            if (array_key_exists($field, $visibility['proyecto_detalles'] ?? [])) {
+                $normalized['proyecto_detalles'][$field] = $this->toBooleanWithFallback(
+                    $visibility['proyecto_detalles'][$field],
+                    true
+                );
+            }
+        }
+
+        foreach (['habilidades', 'experiencias', 'proyectos'] as $group) {
+            $normalized[$group] = $this->normalizeDynamicVisibility($visibility[$group] ?? []);
+        }
+
+        return $normalized;
+    }
+
+    private function normalizeDynamicVisibility(mixed $items): array
+    {
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($items as $key => $value) {
+            $id = trim((string) $key);
+
+            if ($id === '' || strlen($id) > 80) {
+                continue;
+            }
+
+            if (! preg_match('/^[A-Za-z0-9_-]+$/', $id)) {
+                continue;
+            }
+
+            $normalized[$id] = $this->toBooleanWithFallback($value, true);
+        }
+
+        return $normalized;
+    }
+
+    private function toBooleanWithFallback(mixed $value, bool $fallback): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value === 1;
+        }
+
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+
+            if (in_array($normalized, ['1', 'true', 't', 'yes', 'on', 'publico'], true)) {
+                return true;
+            }
+
+            if (in_array($normalized, ['0', 'false', 'f', 'no', 'off', 'privado'], true)) {
+                return false;
+            }
+        }
+
+        return $fallback;
+    }
+
+    private function syncVisibilityToContentTables(int $userId, array $visibility): void
+    {
+        $this->syncProfileVisibility($userId, $visibility['perfil'] ?? []);
+        $this->syncSkillsVisibility($userId, $visibility['habilidades'] ?? []);
+        $this->syncExperiencesVisibility($userId, $visibility['experiencias'] ?? []);
+        $this->syncProjectsVisibility($userId, $visibility['proyectos'] ?? []);
+    }
+
+    private function syncProfileVisibility(int $userId, array $visibility): void
+    {
+        $rows = [];
+        $profileMap = [
+            'profesion' => ['profesion'],
+            'telefono' => ['telefono'],
+            'correo' => ['correo'],
+            'biografia' => ['biografia'],
+            'ubicacion' => ['ciudad', 'pais'],
+        ];
+
+        foreach ($profileMap as $viewField => $databaseFields) {
+            if (! array_key_exists($viewField, $visibility)) {
+                continue;
+            }
+
+            foreach ($databaseFields as $databaseField) {
+                $rows[] = [
+                    'usuario_id' => $userId,
+                    'campo' => $databaseField,
+                    'visible' => $this->pgBoolean($visibility[$viewField]),
+                ];
+            }
+        }
+
+        if (! empty($rows)) {
+            DB::table('visibilidad_campos')->upsert(
+                $rows,
+                ['usuario_id', 'campo'],
+                ['visible']
+            );
+        }
+
+        if (array_key_exists('redes', $visibility)) {
+            DB::table('enlaces')
+                ->where('id_usuario', $userId)
+                ->update(['es_visible' => $this->pgBoolean($visibility['redes'])]);
+        }
+    }
+
+    private function syncSkillsVisibility(int $userId, array $visibility): void
+    {
+        $updates = $this->extractVisibilityIds($visibility, 'habilidad');
+        $this->updateBooleanGroups(
+            'habilidades_usuario',
+            'id_habilidad_usuario',
+            'usuario_id',
+            $userId,
+            'es_visible',
+            $updates
+        );
+    }
+
+    private function syncExperiencesVisibility(int $userId, array $visibility): void
+    {
+        $updates = $this->extractVisibilityIds($visibility, 'experiencia');
+        $this->updateBooleanGroups(
+            'experiencias',
+            'id_experiencia',
+            'usuario_id',
+            $userId,
+            'es_publico',
+            $updates
+        );
+    }
+
+    private function syncProjectsVisibility(int $userId, array $visibility): void
+    {
+        $updates = $this->extractVisibilityIds($visibility, 'proyecto');
+
+        foreach ([true, false] as $visible) {
+            $ids = array_keys(array_filter(
+                $updates,
+                fn (bool $value) => $value === $visible
+            ));
+
+            if (empty($ids)) {
+                continue;
+            }
+
+            DB::table('participaciones')
+                ->where('id_usuario', $userId)
+                ->whereIn('id_proyecto', $ids)
+                ->whereNull('deleted_at')
+                ->update(['visibilidad' => $visible ? 'publico' : 'privado']);
+        }
+    }
+
+    private function extractVisibilityIds(array $visibility, string $prefix): array
+    {
+        $updates = [];
+
+        foreach ($visibility as $key => $visible) {
+            $raw = (string) $key;
+
+            if (preg_match('/^' . preg_quote($prefix, '/') . '-(\d+)$/', $raw, $matches)) {
+                $updates[(int) $matches[1]] = (bool) $visible;
+                continue;
+            }
+
+            if (ctype_digit($raw)) {
+                $updates[(int) $raw] = (bool) $visible;
+            }
+        }
+
+        return $updates;
+    }
+
+    private function updateBooleanGroups(
+        string $table,
+        string $idColumn,
+        string $ownerColumn,
+        int $userId,
+        string $visibilityColumn,
+        array $updates
+    ): void {
+        foreach ([true, false] as $visible) {
+            $ids = array_keys(array_filter(
+                $updates,
+                fn (bool $value) => $value === $visible
+            ));
+
+            if (empty($ids)) {
+                continue;
+            }
+
+            DB::table($table)
+                ->where($ownerColumn, $userId)
+                ->whereIn($idColumn, $ids)
+                ->update([$visibilityColumn => $this->pgBoolean($visible)]);
+        }
+    }
+
     private function serialize(PersonalizacionPortafolio $personalizacion): array
     {
         return [
@@ -108,6 +465,7 @@ class PersonalizacionPortafolioService
             'font_id' => $personalizacion->font_id,
             'frame_id' => $personalizacion->frame_id,
             'disponible' => $this->toBoolean($personalizacion->disponible),
+            'visibilidad' => $this->normalizeVisibility($personalizacion->visibilidad ?? []),
         ];
     }
 }

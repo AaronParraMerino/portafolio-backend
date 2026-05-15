@@ -17,24 +17,25 @@ class HomePortfolioService
     public function getFeaturedPortfolios(int $limit = self::DEFAULT_LIMIT): array
     {
         $limit = max(1, min($limit, 12));
+        $topProjects = $this->topProjects($limit);
 
         return [
             'ultimas_actualizaciones' => $this->recentlyUpdated($limit),
-            'mas_proyectos' => $this->topProjects($limit),
+            'mas_proyectos' => $topProjects,
             'mas_experiencia' => $this->rankedBy('total_experiencias', $limit),
             'mas_habilidades' => $this->rankedBy('total_habilidades', $limit),
             'meta' => [
-                'proyectos_disponibles' => false,
-                'mensaje_proyectos' => 'Este bloque se activara cuando existan proyectos publicos disponibles.',
+                'proyectos_disponibles' => count($topProjects) > 0,
+                'mensaje_proyectos' => count($topProjects) > 0
+                    ? null
+                    : 'Este bloque se activara cuando existan proyectos publicos disponibles.',
             ],
         ];
     }
 
     private function topProjects(int $limit): array
     {
-        // Punto de integracion HU-06: cuando exista una tabla/modelo de proyectos publicos,
-        // conectar aqui el agregado por usuario y alimentar total_proyectos en basePortfolioQuery().
-        return [];
+        return $this->rankedBy('total_proyectos', $limit);
     }
 
     public function getPublicPortfolio(int $userId): ?array
@@ -73,6 +74,10 @@ class HomePortfolioService
             $query->whereRaw('COALESCE(habilidades_publicas.total_habilidades, 0) > 0');
         }
 
+        if ($field === 'total_proyectos') {
+            $query->whereRaw('COALESCE(proyectos_publicos.total_proyectos, 0) > 0');
+        }
+
         $users = $query
             ->orderByDesc($field)
             ->orderByDesc('ultima_actividad')
@@ -101,6 +106,16 @@ class HomePortfolioService
             ->whereRaw('habilidades.estado = true')
             ->groupBy('habilidades_usuario.usuario_id');
 
+        $projectTotals = DB::table('participaciones')
+            ->join('proyectos', 'proyectos.id_proyecto', '=', 'participaciones.id_proyecto')
+            ->select('participaciones.id_usuario')
+            ->selectRaw('COUNT(DISTINCT proyectos.id_proyecto) AS total_proyectos')
+            ->selectRaw('MAX(COALESCE(proyectos.updated_at, participaciones.updated_at)) AS proyectos_actualizados')
+            ->where('participaciones.visibilidad', 'publico')
+            ->whereNull('participaciones.deleted_at')
+            ->whereNull('proyectos.deleted_at')
+            ->groupBy('participaciones.id_usuario');
+
         return Usuario::query()
             ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
             ->leftJoin('visibilidad_campos as vis_profesion', function ($join) {
@@ -125,6 +140,9 @@ class HomePortfolioService
             ->leftJoinSub($skillTotals, 'habilidades_publicas', function ($join) {
                 $join->on('habilidades_publicas.usuario_id', '=', 'usuarios.id_usuario');
             })
+            ->leftJoinSub($projectTotals, 'proyectos_publicos', function ($join) {
+                $join->on('proyectos_publicos.id_usuario', '=', 'usuarios.id_usuario');
+            })
             ->where('usuarios.estado', 'activo')
             ->whereRaw('perfiles.es_publico = true')
             ->select([
@@ -141,13 +159,14 @@ class HomePortfolioService
             ->selectRaw('CASE WHEN COALESCE(vis_pais.visible, false) = true THEN perfiles.pais ELSE NULL END AS pais')
             ->selectRaw('COALESCE(experiencias_publicas.total_experiencias, 0) AS total_experiencias')
             ->selectRaw('COALESCE(habilidades_publicas.total_habilidades, 0) AS total_habilidades')
-            ->selectRaw('0 AS total_proyectos')
+            ->selectRaw('COALESCE(proyectos_publicos.total_proyectos, 0) AS total_proyectos')
             ->selectRaw("
                 GREATEST(
                     COALESCE(usuarios.updated_at, '1970-01-01'),
                     COALESCE(perfiles.updated_at, '1970-01-01'),
                     COALESCE(experiencias_publicas.experiencias_actualizadas, '1970-01-01'),
-                    COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01')
+                    COALESCE(habilidades_publicas.habilidades_actualizadas, '1970-01-01'),
+                    COALESCE(proyectos_publicos.proyectos_actualizados, '1970-01-01')
                 ) AS ultima_actividad
             ");
     }

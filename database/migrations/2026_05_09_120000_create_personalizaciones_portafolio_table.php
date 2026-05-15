@@ -17,7 +17,7 @@ return new class extends Migration
 
             $table->string('hero_color', 20)->default('#0c1a2e');
             $table->enum('hero_bg_source', ['foto', 'custom'])->default('custom');
-            $table->enum('hero_pattern', ['dots', 'grid', 'hex', 'none'])->default('dots');
+            $table->enum('hero_pattern', ['dots', 'grid', 'hex', 'waves', 'none'])->default('none');
             $table->enum('avatar_bg_source', ['foto', 'custom'])->default('foto');
             $table->string('avatar_color', 20)->default('#0c1a2e');
             $table->string('accent_color', 20)->default('#0077b7');
@@ -25,8 +25,8 @@ return new class extends Migration
             $table->boolean('text_color_auto')->default(true);
             $table->string('text_color', 20)->default('#111827');
             $table->enum('font_id', ['inter', 'mono', 'georgia', 'system'])->default('inter');
-            $table->enum('frame_id', ['thick', 'mac', 'linux', 'windows', 'none'])->default('mac');
-            $table->boolean('disponible')->default(false);
+            $table->enum('frame_id', ['thick', 'mac', 'linux', 'windows', 'none'])->default('none');
+            $table->boolean('disponible')->default(true);
 
             $table->timestamps();
 

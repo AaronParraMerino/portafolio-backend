@@ -20,25 +20,28 @@ class PortafolioPublicoService
             return null;
         }
 
+        $configuracion = $this->personalizacionService->getByUser($userId) ?? [];
+
         return [
-            'perfil' => $this->serializePerfil($usuario),
+            'perfil' => $this->serializePerfil($usuario, $configuracion['visibilidad']['perfil'] ?? []),
             'redes' => $this->getRedes($userId),
             'habilidades' => $this->getHabilidades($userId),
             'experiencias' => $this->getExperiencias($userId),
             'proyectos' => $this->getProyectos($userId),
-            'config' => $this->personalizacionService->getByUser($userId) ?? (object) [],
+            'config' => $configuracion ?: (object) [],
         ];
     }
 
-    private function serializePerfil(Usuario $usuario): array
+    private function serializePerfil(Usuario $usuario, array $configVisibility = []): array
     {
         $perfil = $usuario->perfil;
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
             ->toArray();
 
+        $nombreVisible = $this->visibleFromConfig($configVisibility, 'nombre', true);
         $visibilidad = [
-            'nombre' => true,
+            'nombre' => $nombreVisible,
             'correo' => $this->visible($visibilidadRaw, 'correo'),
             'telefono' => $this->visible($visibilidadRaw, 'telefono'),
             'biografia' => $this->visible($visibilidadRaw, 'biografia'),
@@ -50,8 +53,8 @@ class PortafolioPublicoService
         return [
             'id' => $usuario->id_usuario,
             'id_usuario' => $usuario->id_usuario,
-            'nombre' => $usuario->nombre,
-            'apellido' => $usuario->apellido,
+            'nombre' => $nombreVisible ? $usuario->nombre : null,
+            'apellido' => $nombreVisible ? $usuario->apellido : null,
             'correo' => $visibilidad['correo'] ? $usuario->correo : null,
             'telefono' => $visibilidad['telefono'] ? $usuario->telefono : null,
             'profesion' => $visibilidad['profesion'] ? $perfil?->profesion : null,
@@ -178,11 +181,34 @@ class PortafolioPublicoService
             ->values()
             ->all();
 
-        $repositorios = DB::table('proyecto_repositorios')
-            ->where('id_proyecto', $id)
-            ->where('proveedor', 'github')
-            ->whereNull('deleted_at')
-            ->orderBy('id_proyecto_repositorio')
+        $repositoriosDetalle = DB::table('proyecto_repositorios as pr')
+            ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->where('pr.id_proyecto', $id)
+            ->whereNull('pr.deleted_at')
+            ->orderBy('pr.id_proyecto_repositorio')
+            ->select(
+                'pr.id_proyecto_repositorio',
+                'pr.nombre',
+                'pr.tipo',
+                'pr.proveedor',
+                'pr.url_repositorio',
+                'pr.descripcion',
+                'rg.github_owner',
+                'rg.github_repo_name',
+                'rg.github_description',
+                'rg.github_homepage',
+                'rg.stars_count',
+                'rg.forks_count',
+                'rg.commits_count',
+                'rg.contributors_count',
+                'rg.last_push_at',
+                'rg.last_sync_at'
+            )
+            ->get()
+            ->map(fn ($repo) => (array) $repo)
+            ->values();
+
+        $repositorios = $repositoriosDetalle
             ->pluck('url_repositorio')
             ->filter()
             ->values();
@@ -215,6 +241,7 @@ class PortafolioPublicoService
             'id_proyecto' => $id,
             'url_repositorios' => $repositorios->all(),
             'url_repositorio' => $repositorios->first() ?? '',
+            'repositorios_detalle' => $repositoriosDetalle->all(),
             'etiquetas' => $tecnologiaNombres->all(),
             'tecnologias' => $tecnologiaNombres->all(),
             'tecnologias_detalle' => $tecnologias->map(fn ($tech) => (array) $tech)->all(),
@@ -233,6 +260,15 @@ class PortafolioPublicoService
     private function visible(array $visibilidadRaw, string $campo): bool
     {
         return $this->toBoolean($visibilidadRaw[$campo] ?? false);
+    }
+
+    private function visibleFromConfig(array $visibility, string $campo, bool $fallback = true): bool
+    {
+        if (! array_key_exists($campo, $visibility)) {
+            return $fallback;
+        }
+
+        return $this->toBoolean($visibility[$campo], $fallback);
     }
 
     private function toBoolean(mixed $value, bool $fallback = false): bool
