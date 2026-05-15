@@ -78,8 +78,8 @@ class UsuarioController extends Controller
             'correo' => ['sometimes', 'email', 'max:255', 'unique:usuarios,correo,' . $id . ',id_usuario'],
             'password' => ['sometimes', 'string', 'min:8'],
             'telefono' => ['nullable', 'string', 'max:20'],
-            'rol' => ['sometimes', 'in:admin,usuario'],
-            'estado' => ['sometimes', 'in:activo,bloqueado'],
+            'rol' => ['sometimes', 'in:admin,usuario,otro'],
+            'estado' => ['sometimes', 'in:activo,bloqueado,inactivo,pausado'],
             'idioma_preferido' => ['nullable', 'string', 'max:50'],
         ]);
 
@@ -102,6 +102,7 @@ class UsuarioController extends Controller
     public function destroy($id): JsonResponse
     {
         $usuario = $this->usuarioService->findById((int) $id);
+        $authUser = request()->user();
 
         if (! $usuario) {
             return response()->json([
@@ -109,10 +110,33 @@ class UsuarioController extends Controller
             ], 404);
         }
 
+        if (! $authUser || ((int) $authUser->id_usuario !== (int) $usuario->id_usuario && $authUser->rol !== 'admin')) {
+            return response()->json([
+                'message' => 'No tienes permiso para eliminar esta cuenta'
+            ], 403);
+        }
+
+        $validator = Validator::make(request()->all(), [
+            'password' => ['required', 'string'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Debes confirmar tu contrasena',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        if (! Hash::check($validator->validated()['password'], $authUser->password)) {
+            return response()->json([
+                'message' => 'La contrasena no es correcta'
+            ], 422);
+        }
+
         $this->usuarioService->delete($usuario);
 
         return response()->json([
-            'message' => 'Usuario eliminado correctamente',
+            'message' => 'Cuenta desactivada correctamente',
         ]);
     }
 

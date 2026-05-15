@@ -1,18 +1,14 @@
 <?php
 
-use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\Auth\GoogleAuthController;
 use Illuminate\Support\Facades\Route;
 
-Route::post('/google', [AuthController::class, 'googleAuth']);
+Route::post('/google', [GoogleAuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
-    Route::post('/google/connect-url', [AuthController::class, 'oauthConnectUrl'])
-        ->defaults('provider', 'google');
-
-    Route::delete('/google/unlink', [AuthController::class, 'oauthUnlink'])
-        ->defaults('provider', 'google');
+    Route::post('/google/connect-url', [GoogleAuthController::class, 'connectUrl']);
+    Route::delete('/google/unlink', [GoogleAuthController::class, 'unlink']);
 });
 
 // Google callback is used by the authenticated connect flow (state token).
-Route::get('/google/callback', [AuthController::class, 'oauthCallback'])
-    ->defaults('provider', 'google');
+Route::get('/google/callback', [GoogleAuthController::class, 'callback']);
