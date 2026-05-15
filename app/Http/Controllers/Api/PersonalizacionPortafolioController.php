@@ -66,7 +66,7 @@ class PersonalizacionPortafolioController extends Controller
             'avatar_color' => $hexColor,
             'hero_bg_source' => ['sometimes', Rule::in(['foto', 'custom'])],
             'avatar_bg_source' => ['sometimes', Rule::in(['foto', 'custom'])],
-            'hero_pattern' => ['sometimes', Rule::in(['dots', 'grid', 'hex', 'none'])],
+            'hero_pattern' => ['sometimes', Rule::in(['dots', 'grid', 'hex', 'waves', 'none'])],
             'font_id' => ['sometimes', Rule::in(['inter', 'mono', 'georgia', 'system'])],
             'frame_id' => ['sometimes', Rule::in(['thick', 'mac', 'linux', 'windows', 'none'])],
             'text_color_auto' => ['sometimes', 'boolean'],

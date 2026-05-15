@@ -60,7 +60,12 @@ class PersonalizacionPortafolioService
             $personalizacion = PersonalizacionPortafolio::where('usuario_id', $userId)->first();
 
             if ($personalizacion) {
-                $personalizacion->update($data);
+                DB::table('personalizaciones_portafolio')
+                    ->where('id_personalizacion', $personalizacion->id_personalizacion)
+                    ->update($this->toDatabasePayload([
+                        ...$data,
+                        'updated_at' => now(),
+                    ]));
             } else {
                 $payload = [
                     'usuario_id' => $userId,
@@ -74,7 +79,17 @@ class PersonalizacionPortafolioService
                     $payload['visibilidad'] = $this->normalizeVisibility($payload['visibilidad']);
                 }
 
-                $personalizacion = PersonalizacionPortafolio::create($payload);
+                $id = DB::table('personalizaciones_portafolio')
+                    ->insertGetId(
+                        $this->toDatabasePayload([
+                            ...$payload,
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]),
+                        'id_personalizacion'
+                    );
+
+                $personalizacion = PersonalizacionPortafolio::find($id);
             }
 
             if ($hasVisibility) {
@@ -85,21 +100,36 @@ class PersonalizacionPortafolioService
         });
     }
 
+    private function toDatabasePayload(array $payload): array
+    {
+        foreach (['text_color_auto', 'disponible'] as $field) {
+            if (array_key_exists($field, $payload)) {
+                $payload[$field] = $this->pgBoolean($payload[$field]);
+            }
+        }
+
+        if (array_key_exists('visibilidad', $payload) && is_array($payload['visibilidad'])) {
+            $payload['visibilidad'] = json_encode($payload['visibilidad']);
+        }
+
+        return $payload;
+    }
+
     private function defaults(): array
     {
         return [
             'hero_color' => '#0c1a2e',
             'hero_bg_source' => 'custom',
-            'hero_pattern' => 'dots',
+            'hero_pattern' => 'none',
             'avatar_bg_source' => 'foto',
             'avatar_color' => '#0c1a2e',
             'accent_color' => '#0077b7',
             'card_bg' => '#ffffff',
-            'text_color_auto' => 'true',
+            'text_color_auto' => true,
             'text_color' => '#111827',
             'font_id' => 'inter',
-            'frame_id' => 'mac',
-            'disponible' => 'false',
+            'frame_id' => 'none',
+            'disponible' => true,
             'visibilidad' => $this->defaultVisibility(),
         ];
     }
@@ -113,11 +143,8 @@ class PersonalizacionPortafolioService
 
             $value = $data[$field];
 
-            if ($value === true || $value === 1 || $value === '1' || $value === 'true') {
-                $data[$field] = 'true';
-            } else {
-                $data[$field] = 'false';
-            }
+            $parsed = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            $data[$field] = $parsed ?? false;
         }
 
         return $data;
