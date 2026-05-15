@@ -7,6 +7,7 @@ require __DIR__.'/api/seccion.php';
 ############# funciones de rutas para usuarios #############
 require __DIR__.'/api/auth.php';
 require __DIR__.'/api/recuperacion.php';
+require __DIR__.'/api/reactivacion-cuenta.php';
 
 ############# datos tabla usuario ##########
 require __DIR__.'/api/usuarios.php';
@@ -16,6 +17,7 @@ require __DIR__.'/api/experiencias.php';
 require __DIR__.'/api/habilidades.php';
 
 require __DIR__.'/api/enlaces.php';
+require __DIR__.'/api/home.php';
 
 ################# apis portafolio ############################
 require __DIR__.'/api/portfolio.php';

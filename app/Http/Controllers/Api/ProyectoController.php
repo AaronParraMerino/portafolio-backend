@@ -37,7 +37,18 @@ class ProyectoController extends Controller
             ->whereNull('p.deleted_at')
             ->whereNull('pr.deleted_at')
             ->orderByDesc('pr.updated_at')
-            ->select('pr.*', 'p.rol', 'p.descripcion_aporte', 'p.visibilidad', 'p.fecha_inicio as part_fecha_inicio', 'p.fecha_fin as part_fecha_fin')
+            ->select(
+                'pr.*',
+                'p.id_participacion',
+                'p.id_usuario as participacion_id_usuario',
+                'p.rol',
+                'p.descripcion_aporte',
+                'p.es_propietario',
+                'p.participacion_validada',
+                'p.visibilidad',
+                'p.fecha_inicio as part_fecha_inicio',
+                'p.fecha_fin as part_fecha_fin'
+            )
             ->get();
 
         $data = $proyectos->map(function ($row) {
@@ -57,6 +68,103 @@ class ProyectoController extends Controller
         return response()->json(['data' => $this->serializeProject($project)]);
     }
 
+    public function participants(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $project = $this->findProjectForUser($userId, $id);
+
+        if (!$project) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'id_proyecto' => $id,
+                'participantes' => $this->collectProjectParticipants($id, $userId),
+            ],
+        ]);
+    }
+
+    public function configuration(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $project = $this->findProjectForUser($userId, $id);
+
+        if (!$project) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $permissions = $this->resolveProjectPermissions($userId, $id);
+        if (! $permissions['puede_configurar']) {
+            return response()->json(['message' => 'No tienes permiso para configurar este proyecto'], 403);
+        }
+
+        return response()->json([
+            'data' => [
+                'configuracion' => $this->getProjectConfiguration($id),
+                'permisos' => $permissions,
+            ],
+        ]);
+    }
+
+    public function updateConfiguration(Request $request, int $id): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $project = $this->findProjectForUser($userId, $id);
+
+        if (!$project) {
+            return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        $permissions = $this->resolveProjectPermissions($userId, $id);
+        if (! $permissions['puede_configurar']) {
+            return response()->json(['message' => 'No tienes permiso para configurar este proyecto'], 403);
+        }
+
+        $payload = $request->validate([
+            'modo_union' => 'sometimes|in:cerrado,por_solicitud,enlace_autenticado,github_validado',
+            'requiere_aprobacion_union' => 'sometimes|boolean',
+            'permitir_participantes_sin_validacion' => 'sometimes|boolean',
+            'puede_editar_proyecto' => 'sometimes|in:propietarios,autoridad_github,participantes_validados,participantes',
+            'puede_administrar_proyecto' => 'sometimes|in:propietarios,autoridad_github',
+            'github_nivel_autoridad' => 'sometimes|in:owner,maintainer,admin_push',
+            'github_prevalece_sobre_creador' => 'sometimes|boolean',
+            'enlace_union_activo' => 'sometimes|boolean',
+            'visibilidad_github_validado_externo' => 'sometimes|in:oculto,visible',
+            'visibilidad_github_validado_usuario' => 'sometimes|in:visible,oculto',
+            'visibilidad_usuario_sin_validacion' => 'sometimes|in:oculto,visible',
+            'permitir_remover_participantes_sin_validacion' => 'sometimes|boolean',
+        ]);
+
+        unset($payload['enlace_union_token'], $payload['enlace_union_expira_at']);
+        foreach ([
+            'requiere_aprobacion_union',
+            'permitir_participantes_sin_validacion',
+            'github_prevalece_sobre_creador',
+            'enlace_union_activo',
+            'permitir_remover_participantes_sin_validacion',
+        ] as $booleanField) {
+            if (array_key_exists($booleanField, $payload)) {
+                $payload[$booleanField] = $this->postgresBool($payload[$booleanField]);
+            }
+        }
+
+        $payload['updated_at'] = now();
+
+        DB::table('proyecto_configuraciones')
+            ->where('id_proyecto', $id)
+            ->update($payload);
+
+        return response()->json([
+            'message' => 'Configuracion actualizada correctamente',
+            'data' => [
+                'configuracion' => $this->getProjectConfiguration($id),
+                'permisos' => $this->resolveProjectPermissions($userId, $id),
+            ],
+        ]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $userId = (int) ($request->user()->id_usuario ?? 0);
@@ -65,12 +173,17 @@ class ProyectoController extends Controller
         }
 
         $payload = $this->validatePayload($request);
-        $existingProjectId = $this->githubRepositorySyncService->findExistingProjectForValidatedRepoUrls(
+        $existingProject = $this->githubRepositorySyncService->findExistingProjectForJoinableRepoUrls(
             $userId,
             $payload['url_repositorios'] ?? [],
         );
 
-        if ($existingProjectId) {
+        if (($existingProject['status'] ?? null) === 'repo_requires_validation') {
+            return response()->json($existingProject, $existingProject['http_status'] ?? 403);
+        }
+
+        if (($existingProject['status'] ?? null) === 'success') {
+            $existingProjectId = (int) $existingProject['id_proyecto'];
             $this->githubRepositorySyncService->linkUsuarioToExistingProjectByRepo($userId, $existingProjectId, [
                 'rol' => $payload['rol'] ?? null,
                 'descripcion_aporte' => $payload['descripcion_aporte'] ?? null,
@@ -118,6 +231,12 @@ class ProyectoController extends Controller
                 'updated_at' => $now,
             ]);
 
+            DB::table('proyecto_configuraciones')->insertOrIgnore([
+                'id_proyecto' => $idProyecto,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
             return (int) $idProyecto;
         });
 
@@ -135,6 +254,10 @@ class ProyectoController extends Controller
         $project = $this->findProjectForUser($userId, $id);
         if (!$project) {
             return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        if (! $this->resolveProjectPermissions($userId, $id)['puede_editar']) {
+            return response()->json(['message' => 'No tienes permiso para editar este proyecto'], 403);
         }
 
         $payload = $this->validatePayload($request, true);
@@ -212,6 +335,10 @@ class ProyectoController extends Controller
             return response()->json(['message' => 'Proyecto no encontrado'], 404);
         }
 
+        if (! $this->resolveProjectPermissions($userId, $id)['puede_eliminar']) {
+            return response()->json(['message' => 'No tienes permiso para eliminar este proyecto'], 403);
+        }
+
         DB::table('proyectos')->where('id_proyecto', $id)->update([
             'deleted_at' => now(),
             'updated_at' => now(),
@@ -231,6 +358,11 @@ class ProyectoController extends Controller
 
         if (! $participacion) {
             return response()->json(['message' => 'Participacion no encontrada'], 404);
+        }
+
+        $permissions = $this->resolveProjectPermissions($userId, $id);
+        if (! $permissions['puede_desvincular_participacion']) {
+            return response()->json(['message' => 'No tienes permiso para desvincular esta participacion'], 403);
         }
 
         $participantesActivos = DB::table('participaciones')
@@ -265,6 +397,10 @@ class ProyectoController extends Controller
         $userId = (int) ($request->user()->id_usuario ?? 0);
         if (!$this->findProjectForUser($userId, $id)) {
             return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        if (! $this->resolveProjectPermissions($userId, $id)['puede_editar']) {
+            return response()->json(['message' => 'No tienes permiso para editar este proyecto'], 403);
         }
 
         $request->validate([
@@ -323,6 +459,10 @@ class ProyectoController extends Controller
             return response()->json(['message' => 'Proyecto no encontrado'], 404);
         }
 
+        if (! $this->resolveProjectPermissions($userId, $id)['puede_editar']) {
+            return response()->json(['message' => 'No tienes permiso para editar este proyecto'], 403);
+        }
+
         $urls = collect($request->input('urls', $request->input('imagenes', [])))
             ->filter(fn ($u) => is_string($u) && trim($u) !== '')
             ->values();
@@ -374,6 +514,10 @@ class ProyectoController extends Controller
         $userId = (int) ($request->user()->id_usuario ?? 0);
         if (!$this->findProjectForUser($userId, $id)) {
             return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        if (! $this->resolveProjectPermissions($userId, $id)['puede_editar']) {
+            return response()->json(['message' => 'No tienes permiso para editar este proyecto'], 403);
         }
 
         $request->validate([
@@ -439,6 +583,10 @@ class ProyectoController extends Controller
             return response()->json(['message' => 'Proyecto no encontrado'], 404);
         }
 
+        if (! $this->resolveProjectPermissions($userId, $id)['puede_editar']) {
+            return response()->json(['message' => 'No tienes permiso para editar este proyecto'], 403);
+        }
+
         $urls = collect($request->input('urls', $request->input('documentos', [])))
             ->filter(fn ($u) => is_string($u) && trim($u) !== '')
             ->values();
@@ -491,6 +639,10 @@ class ProyectoController extends Controller
         $project = $this->findProjectForUser($userId, $id);
         if (!$project) {
             return response()->json(['message' => 'Proyecto no encontrado'], 404);
+        }
+
+        if (! $this->resolveProjectPermissions($userId, $id)['puede_editar']) {
+            return response()->json(['message' => 'No tienes permiso para editar este proyecto'], 403);
         }
 
         $payload = $request->validate([
@@ -550,7 +702,18 @@ class ProyectoController extends Controller
             ->where('pr.id_proyecto', $id)
             ->whereNull('p.deleted_at')
             ->whereNull('pr.deleted_at')
-            ->select('pr.*', 'p.rol', 'p.descripcion_aporte', 'p.visibilidad', 'p.fecha_inicio as part_fecha_inicio', 'p.fecha_fin as part_fecha_fin')
+            ->select(
+                'pr.*',
+                'p.id_participacion',
+                'p.id_usuario as participacion_id_usuario',
+                'p.rol',
+                'p.descripcion_aporte',
+                'p.es_propietario',
+                'p.participacion_validada',
+                'p.visibilidad',
+                'p.fecha_inicio as part_fecha_inicio',
+                'p.fecha_fin as part_fecha_fin'
+            )
             ->first();
 
         return $row ? (array) $row : null;
@@ -603,18 +766,31 @@ class ProyectoController extends Controller
             ->whereNull('deleted_at')
             ->count();
 
+        $currentUserId = (int) ($project['participacion_id_usuario'] ?? 0);
+        $permissions = $currentUserId > 0
+            ? $this->resolveProjectPermissions($currentUserId, $id)
+            : $this->defaultProjectPermissions();
+
         return [
             ...$project,
             'id' => $id,
             'id_proyecto' => $id,
+            'configuracion' => $this->getProjectConfiguration($id),
+            'permisos' => $permissions,
+            'puede_editar' => $permissions['puede_editar'],
+            'puede_eliminar' => $permissions['puede_eliminar'],
+            'puede_configurar' => $permissions['puede_configurar'],
             'url_repositorios' => $repositorios->all(),
             'url_repositorio' => $repositorios->first() ?? '',
             'etiquetas' => $tecnologiaNombres->all(),
             'tecnologias' => $tecnologiaNombres->all(),
             'tecnologias_detalle' => $tecnologias->map(fn ($tech) => (array) $tech)->all(),
             'participantes_count' => $participantesCount,
-            'puede_desvincular_participacion' => $participantesCount > 1,
+            'puede_desvincular_participacion' => $permissions['puede_desvincular_participacion'],
             'participacion' => [
+                'id_participacion' => $project['id_participacion'] ?? null,
+                'es_propietario' => (bool) ($project['es_propietario'] ?? false),
+                'participacion_validada' => (bool) ($project['participacion_validada'] ?? false),
                 'rol' => $project['rol'] ?? null,
                 'descripcion_aporte' => $project['descripcion_aporte'] ?? null,
                 'visibilidad' => $project['visibilidad'] ?? 'publico',
@@ -623,6 +799,348 @@ class ProyectoController extends Controller
             ],
             'evidencias' => $evidencias,
         ];
+    }
+
+    private function defaultProjectConfiguration(): array
+    {
+        return [
+            'modo_union' => 'github_validado',
+            'requiere_aprobacion_union' => true,
+            'permitir_participantes_sin_validacion' => false,
+            'puede_editar_proyecto' => 'participantes_validados',
+            'puede_administrar_proyecto' => 'propietarios',
+            'github_nivel_autoridad' => 'maintainer',
+            'github_prevalece_sobre_creador' => true,
+            'enlace_union_activo' => false,
+            'enlace_union_token' => null,
+            'enlace_union_expira_at' => null,
+            'visibilidad_github_validado_externo' => 'visible',
+            'visibilidad_github_validado_usuario' => 'visible',
+            'visibilidad_usuario_sin_validacion' => 'visible',
+            'permitir_remover_participantes_sin_validacion' => false,
+        ];
+    }
+
+    private function getProjectConfiguration(int $idProyecto): array
+    {
+        $row = DB::table('proyecto_configuraciones')
+            ->where('id_proyecto', $idProyecto)
+            ->first();
+
+        if (! $row) {
+            $now = now();
+            DB::table('proyecto_configuraciones')->insertOrIgnore([
+                'id_proyecto' => $idProyecto,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            $row = DB::table('proyecto_configuraciones')
+                ->where('id_proyecto', $idProyecto)
+                ->first();
+        }
+
+        $config = [
+            ...$this->defaultProjectConfiguration(),
+            ...(array) $row,
+        ];
+
+        foreach ([
+            'requiere_aprobacion_union',
+            'permitir_participantes_sin_validacion',
+            'github_prevalece_sobre_creador',
+            'enlace_union_activo',
+            'permitir_remover_participantes_sin_validacion',
+        ] as $key) {
+            $config[$key] = (bool) ($config[$key] ?? false);
+        }
+
+        $config['id_proyecto'] = (int) ($config['id_proyecto'] ?? $idProyecto);
+
+        return $config;
+    }
+
+    private function defaultProjectPermissions(): array
+    {
+        return [
+            'puede_editar' => false,
+            'puede_eliminar' => false,
+            'puede_configurar' => false,
+            'puede_administrar' => false,
+            'puede_desvincular_participacion' => false,
+            'es_propietario' => false,
+            'es_autoridad_github' => false,
+            'participacion_validada' => false,
+            'nivel_github' => null,
+            'relacion_github' => null,
+        ];
+    }
+
+    private function resolveProjectPermissions(int $userId, int $idProyecto): array
+    {
+        $participacion = DB::table('participaciones')
+            ->where('id_usuario', $userId)
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->first();
+
+        if (! $participacion) {
+            return $this->defaultProjectPermissions();
+        }
+
+        $config = $this->getProjectConfiguration($idProyecto);
+        $authority = $this->getGithubAuthorityForProject($userId, $idProyecto, $config);
+
+        $isOwner = (bool) ($participacion->es_propietario ?? false);
+        $isGithubAuthority = (bool) ($authority['tiene_autoridad'] ?? false);
+        $isValidated = (bool) ($participacion->participacion_validada ?? false)
+            || $this->hasValidatedGithubParticipation($userId, $idProyecto);
+
+        $canEdit = match ($config['puede_editar_proyecto'] ?? 'participantes_validados') {
+            'propietarios' => $isOwner || $isGithubAuthority,
+            'autoridad_github' => $isOwner || $isGithubAuthority,
+            'participantes' => true,
+            default => $isOwner || $isGithubAuthority || $isValidated,
+        };
+
+        $canAdmin = match ($config['puede_administrar_proyecto'] ?? 'propietarios') {
+            'autoridad_github' => $isOwner || $isGithubAuthority,
+            default => $isOwner || $isGithubAuthority,
+        };
+
+        $activeParticipants = DB::table('participaciones')
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->count();
+
+        return [
+            'puede_editar' => $canEdit,
+            'puede_eliminar' => $isOwner,
+            'puede_configurar' => $isOwner || $isGithubAuthority,
+            'puede_administrar' => $canAdmin,
+            'puede_desvincular_participacion' => $activeParticipants > 1,
+            'es_propietario' => $isOwner,
+            'es_autoridad_github' => $isGithubAuthority,
+            'participacion_validada' => $isValidated,
+            'nivel_github' => $authority['nivel'] ?? null,
+            'relacion_github' => $authority['relacion'] ?? null,
+        ];
+    }
+
+    private function hasValidatedGithubParticipation(int $userId, int $idProyecto): bool
+    {
+        $repoIds = $this->projectGithubRepositoryIds($idProyecto);
+
+        if (empty($repoIds)) {
+            return false;
+        }
+
+        return DB::table('usuario_repositorio_validaciones')
+            ->where('id_usuario', $userId)
+            ->whereIn('id_repositorio_github', $repoIds)
+            ->whereRaw('validado = TRUE')
+            ->exists();
+    }
+
+    private function getGithubAuthorityForProject(int $userId, int $idProyecto, array $config): array
+    {
+        $repoIds = $this->projectGithubRepositoryIds($idProyecto);
+
+        if (empty($repoIds)) {
+            return ['tiene_autoridad' => false, 'nivel' => null, 'relacion' => null];
+        }
+
+        $validaciones = DB::table('usuario_repositorio_validaciones')
+            ->where('id_usuario', $userId)
+            ->whereIn('id_repositorio_github', $repoIds)
+            ->whereRaw('validado = TRUE')
+            ->get();
+
+        foreach ($validaciones as $validacion) {
+            $relation = Str::lower((string) ($validacion->relacion_github ?? ''));
+            $permissions = $this->decodeGithubPermissions($validacion->permisos_github ?? null);
+            $isOwner = (bool) ($validacion->es_propietario ?? false) || $relation === 'owner';
+            $hasMaintainer = $isOwner || in_array($relation, ['maintainer', 'admin'], true) || (bool) ($permissions['admin'] ?? false);
+            $hasAdminPush = $hasMaintainer || (bool) ($permissions['push'] ?? false);
+
+            $required = $config['github_nivel_autoridad'] ?? 'maintainer';
+            $allowed = match ($required) {
+                'owner' => $isOwner,
+                'admin_push' => $hasAdminPush,
+                default => $hasMaintainer,
+            };
+
+            if ($allowed) {
+                return [
+                    'tiene_autoridad' => true,
+                    'nivel' => $isOwner ? 'owner' : ($hasMaintainer ? 'maintainer' : 'admin_push'),
+                    'relacion' => $relation ?: null,
+                ];
+            }
+        }
+
+        return ['tiene_autoridad' => false, 'nivel' => null, 'relacion' => null];
+    }
+
+    private function projectGithubRepositoryIds(int $idProyecto): array
+    {
+        return DB::table('proyecto_repositorios as pr')
+            ->join('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->where('pr.id_proyecto', $idProyecto)
+            ->where('pr.proveedor', 'github')
+            ->whereNull('pr.deleted_at')
+            ->pluck('rg.id_repositorio_github')
+            ->filter()
+            ->map(fn ($value) => (int) $value)
+            ->values()
+            ->all();
+    }
+
+    private function decodeGithubPermissions(mixed $permissions): array
+    {
+        if (is_array($permissions)) {
+            return $permissions;
+        }
+
+        if (is_string($permissions) && trim($permissions) !== '') {
+            $decoded = json_decode($permissions, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        return [];
+    }
+
+    private function postgresBool(mixed $value): string
+    {
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN) ? 'TRUE' : 'FALSE';
+    }
+
+    private function collectProjectParticipants(int $idProyecto, int $requestUserId): array
+    {
+        $repos = DB::table('proyecto_repositorios as pr')
+            ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->where('pr.id_proyecto', $idProyecto)
+            ->where('pr.proveedor', 'github')
+            ->whereNull('pr.deleted_at')
+            ->select(
+                'pr.id_proyecto_repositorio',
+                'pr.url_repositorio',
+                'rg.id_repositorio_github',
+                'rg.github_owner',
+                'rg.github_repo_name'
+            )
+            ->get();
+
+        $repoGithubIds = $repos
+            ->pluck('id_repositorio_github')
+            ->filter()
+            ->values();
+
+        $systemRows = DB::table('participaciones as p')
+            ->join('usuarios as u', 'u.id_usuario', '=', 'p.id_usuario')
+            ->leftJoin('perfiles as pe', 'pe.usuario_id', '=', 'u.id_usuario')
+            ->leftJoin('cuentas_oauth as co', function ($join) {
+                $join->on('co.usuario_id', '=', 'u.id_usuario')
+                    ->where('co.provider', '=', 'github');
+            })
+            ->where('p.id_proyecto', $idProyecto)
+            ->whereNull('p.deleted_at')
+            ->select(
+                'p.id_participacion',
+                'p.id_usuario',
+                'p.rol',
+                'p.descripcion_aporte',
+                'p.es_propietario',
+                'p.participacion_validada',
+                'u.nombre',
+                'u.apellido',
+                'u.correo',
+                'pe.foto_perfil',
+                'co.id_cuenta_oauth',
+                'co.provider_user_id',
+                'co.nombre as github_nombre',
+                'co.foto_url as github_foto_url'
+            )
+            ->get();
+
+        $userIds = $systemRows->pluck('id_usuario')->filter()->values();
+        $validaciones = $repoGithubIds->isEmpty() || $userIds->isEmpty()
+            ? collect()
+            : DB::table('usuario_repositorio_validaciones')
+                ->whereIn('id_usuario', $userIds->all())
+                ->whereIn('id_repositorio_github', $repoGithubIds->all())
+                ->get()
+                ->groupBy('id_usuario');
+
+        $participants = [];
+        foreach ($systemRows as $row) {
+            $userValidaciones = $validaciones->get($row->id_usuario, collect());
+            $validacion = $userValidaciones->first(fn ($item) => (bool) $item->validado)
+                ?? $userValidaciones->first();
+            $validado = (bool) ($validacion?->validado ?? $row->participacion_validada ?? false);
+            $tipo = $validado
+                ? 'usuario_github_validado'
+                : 'usuario_sin_validacion_github';
+
+            $item = [
+                'id' => 'participacion-' . $row->id_participacion,
+                'id_participacion' => (int) $row->id_participacion,
+                'id_usuario' => (int) $row->id_usuario,
+                'nombre' => trim(($row->nombre ?? '') . ' ' . ($row->apellido ?? '')),
+                'email' => $row->correo,
+                'rol' => $row->rol,
+                'descripcion_aporte' => $row->descripcion_aporte,
+                'es_propietario' => (bool) $row->es_propietario,
+                'foto_perfil' => $row->foto_perfil,
+                'github_avatar_url' => $row->github_foto_url,
+                'avatar_url' => $row->foto_perfil ?: $row->github_foto_url,
+                'source' => 'sistema',
+                'tipo_participante' => $tipo,
+                'origen_participante' => $tipo,
+                'tiene_cuenta' => true,
+                'tiene_vinculacion_github' => ! is_null($row->id_cuenta_oauth),
+                'validacion_github' => $validado,
+                'github_id' => $row->provider_user_id,
+                'github_username' => $row->github_nombre,
+                'validacion' => [
+                    'validado' => $validado,
+                    'relacion_github' => $validacion->relacion_github ?? 'unknown',
+                    'es_propietario' => (bool) ($validacion->es_propietario ?? false),
+                    'ultima_verificacion_at' => $validacion->ultima_verificacion_at ?? null,
+                ],
+            ];
+
+            $participants[] = $item;
+        }
+
+        return collect($participants)
+            ->unique(function ($item) {
+                if (! empty($item['id_usuario'])) {
+                    return 'usuario:' . $item['id_usuario'];
+                }
+
+                if (! empty($item['github_id'])) {
+                    return 'github-id:' . $item['github_id'];
+                }
+
+                return 'github-login:' . strtolower((string) ($item['github_username'] ?? $item['id']));
+            })
+            ->sortBy([
+                fn ($a, $b) => $this->participantTypeOrder($a) <=> $this->participantTypeOrder($b),
+                fn ($a, $b) => ((bool) ($b['es_propietario'] ?? false)) <=> ((bool) ($a['es_propietario'] ?? false)),
+                fn ($a, $b) => strcmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')),
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function participantTypeOrder(array $participant): int
+    {
+        return match ($participant['tipo_participante'] ?? '') {
+            'usuario_github_validado' => 0,
+            'usuario_sin_validacion_github' => 1,
+            default => 2,
+        };
     }
 
     private function syncLinkEvidences(int $idProyecto, array $payload): void

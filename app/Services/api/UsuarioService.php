@@ -3,6 +3,7 @@
 namespace App\Services\api;
 
 use App\Models\Usuario;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 
 class UsuarioService
@@ -40,6 +41,48 @@ class UsuarioService
 
     public function delete(Usuario $usuario): void
     {
-        $usuario->delete();
+        DB::transaction(function () use ($usuario) {
+            $usuario->update([
+                'estado' => 'inactivo',
+                'intentos_fallidos' => 0,
+                'fecha_bloqueo' => null,
+            ]);
+
+            DB::table('visibilidad_campos')
+                ->where('usuario_id', $usuario->id_usuario)
+                ->update(['visible' => DB::raw('FALSE')]);
+
+            DB::table('enlaces')
+                ->where('id_usuario', $usuario->id_usuario)
+                ->update(['es_visible' => DB::raw('FALSE')]);
+
+            DB::table('habilidades_usuario')
+                ->where('usuario_id', $usuario->id_usuario)
+                ->update(['es_visible' => DB::raw('FALSE')]);
+
+            DB::table('participaciones')
+                ->where('id_usuario', $usuario->id_usuario)
+                ->whereNull('deleted_at')
+                ->update(['visibilidad' => 'privado']);
+
+            $proyectosPropios = DB::table('participaciones')
+                ->where('id_usuario', $usuario->id_usuario)
+                ->whereRaw('es_propietario = TRUE')
+                ->pluck('id_proyecto');
+
+            if ($proyectosPropios->isNotEmpty()) {
+                DB::table('proyecto_evidencias')
+                    ->whereIn('id_proyecto', $proyectosPropios)
+                    ->whereNull('deleted_at')
+                    ->update(['es_visible' => DB::raw('FALSE')]);
+
+                DB::table('uso_tecnologias')
+                    ->whereIn('id_proyecto', $proyectosPropios)
+                    ->whereNull('deleted_at')
+                    ->update(['es_visible' => DB::raw('FALSE')]);
+            }
+
+            $usuario->tokens()->delete();
+        });
     }
 }

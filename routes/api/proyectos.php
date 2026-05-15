@@ -5,6 +5,10 @@ use App\Http\Controllers\Api\ProyectoController;
 
 Route::prefix('projects')->middleware('auth:sanctum')->group(function () {
     Route::get('/usuario/{userId}', [ProyectoController::class, 'indexByUsuario']);
+    Route::get('/{id}/participants', [ProyectoController::class, 'participants']);
+    Route::get('/{id}/participantes', [ProyectoController::class, 'participants']);
+    Route::get('/{id}/configuration', [ProyectoController::class, 'configuration']);
+    Route::put('/{id}/configuration', [ProyectoController::class, 'updateConfiguration']);
     Route::get('/{id}', [ProyectoController::class, 'show']);
     Route::post('/', [ProyectoController::class, 'store']);
     Route::put('/{id}', [ProyectoController::class, 'update']);
