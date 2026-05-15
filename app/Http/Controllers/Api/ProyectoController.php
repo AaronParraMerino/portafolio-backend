@@ -392,6 +392,61 @@ class ProyectoController extends Controller
         return response()->json(['message' => 'Participacion desvinculada correctamente']);
     }
 
+    public function removeParticipant(Request $request, int $id, int $participacionId): JsonResponse
+    {
+        $userId = (int) ($request->user()->id_usuario ?? 0);
+        $permissions = $this->resolveProjectPermissions($userId, $id);
+
+        if (! ($permissions['puede_remover_participantes_sin_validacion'] ?? false)) {
+            return response()->json(['message' => 'No tienes permiso para quitar participantes sin validacion'], 403);
+        }
+
+        $participacion = DB::table('participaciones')
+            ->where('id_participacion', $participacionId)
+            ->where('id_proyecto', $id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        if (! $participacion) {
+            return response()->json(['message' => 'Participacion no encontrada'], 404);
+        }
+
+        if ((int) ($participacion->id_usuario ?? 0) === $userId) {
+            return response()->json(['message' => 'Usa la opcion de desvincular tu propia participacion.'], 422);
+        }
+
+        $isValidated = (bool) ($participacion->participacion_validada ?? false)
+            || $this->hasValidatedGithubParticipation((int) $participacion->id_usuario, $id);
+
+        if ($isValidated) {
+            return response()->json(['message' => 'Solo se pueden quitar participantes sin validacion GitHub desde esta opcion.'], 422);
+        }
+
+        $participantesActivos = DB::table('participaciones')
+            ->where('id_proyecto', $id)
+            ->whereNull('deleted_at')
+            ->count();
+
+        if ($participantesActivos <= 1) {
+            return response()->json(['message' => 'No puedes quitar al unico participante del proyecto.'], 422);
+        }
+
+        DB::transaction(function () use ($participacionId) {
+            DB::table('participacion_repositorios')
+                ->where('id_participacion', $participacionId)
+                ->delete();
+
+            DB::table('participaciones')
+                ->where('id_participacion', $participacionId)
+                ->update([
+                    'deleted_at' => now(),
+                    'updated_at' => now(),
+                ]);
+        });
+
+        return response()->json(['message' => 'Participacion sin validacion quitada correctamente']);
+    }
+
     public function uploadImages(Request $request, int $id): JsonResponse
     {
         $userId = (int) ($request->user()->id_usuario ?? 0);
@@ -780,6 +835,10 @@ class ProyectoController extends Controller
             'puede_editar' => $permissions['puede_editar'],
             'puede_eliminar' => $permissions['puede_eliminar'],
             'puede_configurar' => $permissions['puede_configurar'],
+            'puede_remover_participantes_sin_validacion' => $permissions['puede_remover_participantes_sin_validacion'],
+            'estado' => $this->mapEstadoToFrontend($project['estado_publicacion'] ?? null, $project['estado_desarrollo'] ?? null),
+            'tipo' => $project['categoria_proyecto'] ?? 'sin_especificar',
+            'desarrollado_para' => $project['plataforma_objetivo'] ?? 'sin_especificar',
             'url_repositorios' => $repositorios->all(),
             'url_repositorio' => $repositorios->first() ?? '',
             'etiquetas' => $tecnologiaNombres->all(),
@@ -868,6 +927,7 @@ class ProyectoController extends Controller
             'puede_configurar' => false,
             'puede_administrar' => false,
             'puede_desvincular_participacion' => false,
+            'puede_remover_participantes_sin_validacion' => false,
             'es_propietario' => false,
             'es_autoridad_github' => false,
             'participacion_validada' => false,
@@ -907,6 +967,8 @@ class ProyectoController extends Controller
             'autoridad_github' => $isOwner || $isGithubAuthority,
             default => $isOwner || $isGithubAuthority,
         };
+        $canRemoveUnvalidated = (bool) ($config['permitir_remover_participantes_sin_validacion'] ?? false)
+            && $isGithubAuthority;
 
         $activeParticipants = DB::table('participaciones')
             ->where('id_proyecto', $idProyecto)
@@ -919,6 +981,7 @@ class ProyectoController extends Controller
             'puede_configurar' => $isOwner || $isGithubAuthority,
             'puede_administrar' => $canAdmin,
             'puede_desvincular_participacion' => $activeParticipants > 1,
+            'puede_remover_participantes_sin_validacion' => $canRemoveUnvalidated,
             'es_propietario' => $isOwner,
             'es_autoridad_github' => $isGithubAuthority,
             'participacion_validada' => $isValidated,
@@ -1017,6 +1080,11 @@ class ProyectoController extends Controller
 
     private function collectProjectParticipants(int $idProyecto, int $requestUserId): array
     {
+        $config = $this->getProjectConfiguration($idProyecto);
+        $permissions = $this->resolveProjectPermissions($requestUserId, $idProyecto);
+        $hideUnvalidated = ($config['visibilidad_usuario_sin_validacion'] ?? 'visible') === 'oculto';
+        $canManageUnvalidated = (bool) ($permissions['puede_remover_participantes_sin_validacion'] ?? false);
+
         $repos = DB::table('proyecto_repositorios as pr')
             ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
             ->where('pr.id_proyecto', $idProyecto)
@@ -1081,6 +1149,10 @@ class ProyectoController extends Controller
             $tipo = $validado
                 ? 'usuario_github_validado'
                 : 'usuario_sin_validacion_github';
+
+            if (! $validado && $hideUnvalidated && ! $canManageUnvalidated) {
+                continue;
+            }
 
             $item = [
                 'id' => 'participacion-' . $row->id_participacion,
@@ -1335,11 +1407,28 @@ class ProyectoController extends Controller
             'web' => 'web',
             'movil' => 'movil',
             'mobile' => 'movil',
+            'tablet' => 'movil',
             'escritorio' => 'escritorio',
             'desktop' => 'escritorio',
             'web_movil' => 'web_movil',
+            'tablet_web' => 'web_movil',
+            'multiplataforma' => 'multiplataforma',
             'api' => 'api_backend',
             'api_backend' => 'api_backend',
+            'servidor' => 'api_backend',
+            'datos_ml' => 'datos_ml',
+            'data' => 'datos_ml',
+            'data_bi' => 'datos_ml',
+            'ia_ml' => 'datos_ml',
+            'machine_learning' => 'datos_ml',
+            'terminal' => 'cli',
+            'cli' => 'cli',
+            'iot' => 'iot',
+            'auto' => 'iot',
+            'reloj' => 'iot',
+            'televisor' => 'multiplataforma',
+            'consola' => 'multiplataforma',
+            'kiosko' => 'multiplataforma',
             'otro' => 'otro',
         ];
 
@@ -1349,15 +1438,47 @@ class ProyectoController extends Controller
 
     private function mapCategoria(?string $value): string
     {
-        $valid = [
-            'sin_especificar', 'portafolio', 'educativo', 'financiero', 'ecommerce', 'marketplace',
-            'videojuego', 'salud', 'administrativo', 'red_social', 'dashboard_bi',
-            'gestion_empresarial', 'productividad', 'seguridad', 'entretenimiento',
-            'herramienta_desarrollo', 'otro',
+        $map = [
+            'sin_especificar' => 'sin_especificar',
+            'web' => 'portafolio',
+            'app_web' => 'productividad',
+            'movil' => 'productividad',
+            'desktop' => 'productividad',
+            'videojuego' => 'videojuego',
+            'api' => 'herramienta_desarrollo',
+            'microservicio' => 'herramienta_desarrollo',
+            'ecommerce' => 'ecommerce',
+            'dashboard' => 'dashboard_bi',
+            'sistema_gestion' => 'gestion_empresarial',
+            'saas' => 'productividad',
+            'ia_ml' => 'herramienta_desarrollo',
+            'data_bi' => 'dashboard_bi',
+            'iot' => 'herramienta_desarrollo',
+            'automatizacion' => 'herramienta_desarrollo',
+            'plugin' => 'herramienta_desarrollo',
+            'libreria' => 'herramienta_desarrollo',
+            'bot' => 'herramienta_desarrollo',
+            'blockchain' => 'seguridad',
+            'ar_vr' => 'entretenimiento',
+            'educativo' => 'educativo',
+            'investigacion' => 'educativo',
+            'otro' => 'otro',
+            'portafolio' => 'portafolio',
+            'financiero' => 'financiero',
+            'marketplace' => 'marketplace',
+            'salud' => 'salud',
+            'administrativo' => 'administrativo',
+            'red_social' => 'red_social',
+            'dashboard_bi' => 'dashboard_bi',
+            'gestion_empresarial' => 'gestion_empresarial',
+            'productividad' => 'productividad',
+            'seguridad' => 'seguridad',
+            'entretenimiento' => 'entretenimiento',
+            'herramienta_desarrollo' => 'herramienta_desarrollo',
         ];
 
         $key = Str::lower(trim((string) $value));
-        return in_array($key, $valid, true) ? $key : 'sin_especificar';
+        return $map[$key] ?? 'sin_especificar';
     }
 
     private function mapEstadoPublicacion(?string $value): string
@@ -1382,6 +1503,27 @@ class ProyectoController extends Controller
             'cancelado' => 'cancelado',
             default => 'sin_especificar',
         };
+    }
+
+    private function mapEstadoToFrontend(?string $estadoPublicacion, ?string $estadoDesarrollo): string
+    {
+        if ($estadoPublicacion === 'archivado') {
+            return 'archivado';
+        }
+
+        if ($estadoPublicacion === 'publicado') {
+            return 'publicado';
+        }
+
+        return in_array($estadoDesarrollo, [
+            'sin_especificar',
+            'en_desarrollo',
+            'pausado',
+            'terminado',
+            'mantenimiento',
+            'versionado',
+            'cancelado',
+        ], true) ? $estadoDesarrollo : 'borrador';
     }
 
     private function normalizeStoragePathFromUrl(string $url): ?string
