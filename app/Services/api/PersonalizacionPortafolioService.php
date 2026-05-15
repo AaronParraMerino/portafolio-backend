@@ -24,6 +24,22 @@ class PersonalizacionPortafolioService
         'laboral',
     ];
 
+    private const PROJECT_DETAIL_FIELDS = [
+        'media',
+        'estado',
+        'tipo',
+        'descripcion',
+        'tecnologias',
+        'repositorios',
+        'demo',
+        'videos',
+        'documentos',
+        'fechas',
+        'rol',
+        'aporte',
+        'participantes',
+    ];
+
     public function getByUser(int $userId): ?array
     {
         $personalizacion = PersonalizacionPortafolio::where('usuario_id', $userId)->first();
@@ -150,6 +166,21 @@ class PersonalizacionPortafolioService
             'habilidades' => [],
             'experiencias' => [],
             'proyectos' => [],
+            'proyecto_detalles' => [
+                'media' => true,
+                'estado' => true,
+                'tipo' => true,
+                'descripcion' => true,
+                'tecnologias' => true,
+                'repositorios' => true,
+                'demo' => true,
+                'videos' => true,
+                'documentos' => true,
+                'fechas' => true,
+                'rol' => true,
+                'aporte' => true,
+                'participantes' => true,
+            ],
         ];
     }
 
@@ -179,6 +210,15 @@ class PersonalizacionPortafolioService
             if (array_key_exists($field, $visibility['stats'] ?? [])) {
                 $normalized['stats'][$field] = $this->toBooleanWithFallback(
                     $visibility['stats'][$field],
+                    true
+                );
+            }
+        }
+
+        foreach (self::PROJECT_DETAIL_FIELDS as $field) {
+            if (array_key_exists($field, $visibility['proyecto_detalles'] ?? [])) {
+                $normalized['proyecto_detalles'][$field] = $this->toBooleanWithFallback(
+                    $visibility['proyecto_detalles'][$field],
                     true
                 );
             }

@@ -181,11 +181,34 @@ class PortafolioPublicoService
             ->values()
             ->all();
 
-        $repositorios = DB::table('proyecto_repositorios')
-            ->where('id_proyecto', $id)
-            ->where('proveedor', 'github')
-            ->whereNull('deleted_at')
-            ->orderBy('id_proyecto_repositorio')
+        $repositoriosDetalle = DB::table('proyecto_repositorios as pr')
+            ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->where('pr.id_proyecto', $id)
+            ->whereNull('pr.deleted_at')
+            ->orderBy('pr.id_proyecto_repositorio')
+            ->select(
+                'pr.id_proyecto_repositorio',
+                'pr.nombre',
+                'pr.tipo',
+                'pr.proveedor',
+                'pr.url_repositorio',
+                'pr.descripcion',
+                'rg.github_owner',
+                'rg.github_repo_name',
+                'rg.github_description',
+                'rg.github_homepage',
+                'rg.stars_count',
+                'rg.forks_count',
+                'rg.commits_count',
+                'rg.contributors_count',
+                'rg.last_push_at',
+                'rg.last_sync_at'
+            )
+            ->get()
+            ->map(fn ($repo) => (array) $repo)
+            ->values();
+
+        $repositorios = $repositoriosDetalle
             ->pluck('url_repositorio')
             ->filter()
             ->values();
@@ -218,6 +241,7 @@ class PortafolioPublicoService
             'id_proyecto' => $id,
             'url_repositorios' => $repositorios->all(),
             'url_repositorio' => $repositorios->first() ?? '',
+            'repositorios_detalle' => $repositoriosDetalle->all(),
             'etiquetas' => $tecnologiaNombres->all(),
             'tecnologias' => $tecnologiaNombres->all(),
             'tecnologias_detalle' => $tecnologias->map(fn ($tech) => (array) $tech)->all(),

@@ -82,6 +82,8 @@ class PersonalizacionPortafolioController extends Controller
             'visibilidad.experiencias.*' => ['boolean'],
             'visibilidad.proyectos' => ['sometimes', 'array'],
             'visibilidad.proyectos.*' => ['boolean'],
+            'visibilidad.proyecto_detalles' => ['sometimes', 'array'],
+            'visibilidad.proyecto_detalles.*' => ['boolean'],
         ];
     }
 }
