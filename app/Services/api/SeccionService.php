@@ -111,6 +111,7 @@ class SeccionService
             return 'current_session';
         }
 
+        $this->clearAuthLinksByTokenIds([$tokenId]);
         PersonalAccessToken::query()->where('id', $tokenId)->delete();
 
         return 'closed';
@@ -137,9 +138,33 @@ class SeccionService
             return 0;
         }
 
+        $this->clearAuthLinksByTokenIds($tokenIds);
+
         return PersonalAccessToken::query()
             ->whereIn('id', $tokenIds)
             ->delete();
+    }
+
+    public function clearAuthLinksByTokenIds(array $tokenIds): int
+    {
+        $tokenIds = collect($tokenIds)
+            ->filter(fn ($tokenId) => filled($tokenId))
+            ->map(fn ($tokenId) => (int) $tokenId)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (count($tokenIds) === 0) {
+            return 0;
+        }
+
+        return SesionBase::query()
+            ->whereIn('personal_access_token_id', $tokenIds)
+            ->update([
+                'usuario_id' => null,
+                'personal_access_token_id' => null,
+                'ultima_actividad' => now(),
+            ]);
     }
 
     private function normalizeBooleanFields(array $data): array

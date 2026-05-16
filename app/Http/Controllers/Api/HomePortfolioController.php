@@ -16,9 +16,10 @@ class HomePortfolioController extends Controller
     public function featured(Request $request): JsonResponse
     {
         $limit = (int) $request->query('limit', 6);
+        $search = $request->query('q', $request->query('search'));
 
         return response()->json([
-            'data' => $this->homePortfolioService->getFeaturedPortfolios($limit),
+            'data' => $this->homePortfolioService->getFeaturedPortfolios($limit, $search),
         ]);
     }
 
