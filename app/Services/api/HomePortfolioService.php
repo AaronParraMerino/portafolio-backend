@@ -18,27 +18,18 @@ class HomePortfolioService
     public function getFeaturedPortfolios(int $limit = self::DEFAULT_LIMIT, ?string $search = null): array
     {
         $limit = max(1, min($limit, 12));
-        $search = trim((string) $search);
-
-        if ($search !== '') {
-            return [
-                'resultados_busqueda' => $this->searchRanked($search, $limit),
-                'meta' => [
-                    'modo' => 'busqueda',
-                    'termino' => $search,
-                    'prioridad' => 'coincidencia > proyectos > experiencias > habilidades > recencia',
-                ],
-            ];
-        }
+        $topProjects = $this->topProjects($limit);
 
         return [
             'ultimas_actualizaciones' => $this->recentlyUpdated($limit),
-            'mas_proyectos' => $this->topProjects($limit),
+            'mas_proyectos' => $topProjects,
             'mas_experiencia' => $this->rankedBy('total_experiencias', $limit),
             'mas_habilidades' => $this->rankedBy('total_habilidades', $limit),
             'meta' => [
-                'modo' => 'destacados',
-                'proyectos_disponibles' => true,
+                'proyectos_disponibles' => count($topProjects) > 0,
+                'mensaje_proyectos' => count($topProjects) > 0
+                    ? null
+                    : 'Este bloque se activara cuando existan proyectos publicos disponibles.',
             ],
         ];
     }
@@ -86,6 +77,10 @@ class HomePortfolioService
 
         if ($field === 'total_habilidades') {
             $query->whereRaw('COALESCE(habilidades_publicas.total_habilidades, 0) > 0');
+        }
+
+        if ($field === 'total_proyectos') {
+            $query->whereRaw('COALESCE(proyectos_publicos.total_proyectos, 0) > 0');
         }
 
         $users = $query
@@ -139,15 +134,15 @@ class HomePortfolioService
             ->whereRaw('habilidades.estado = true')
             ->groupBy('habilidades_usuario.usuario_id');
 
-        $projectTotals = DB::table('participaciones as participaciones_publicas')
-            ->join('proyectos as proyectos_publicados', 'proyectos_publicados.id_proyecto', '=', 'participaciones_publicas.id_proyecto')
-            ->select('participaciones_publicas.id_usuario as usuario_id')
-            ->selectRaw('COUNT(DISTINCT proyectos_publicados.id_proyecto) AS total_proyectos')
-            ->selectRaw('MAX(COALESCE(proyectos_publicados.updated_at, participaciones_publicas.updated_at, proyectos_publicados.created_at, participaciones_publicas.created_at)) AS proyectos_actualizados')
-            ->where('participaciones_publicas.visibilidad', 'publico')
-            ->whereNull('participaciones_publicas.deleted_at')
-            ->whereNull('proyectos_publicados.deleted_at')
-            ->groupBy('participaciones_publicas.id_usuario');
+        $projectTotals = DB::table('participaciones')
+            ->join('proyectos', 'proyectos.id_proyecto', '=', 'participaciones.id_proyecto')
+            ->select('participaciones.id_usuario')
+            ->selectRaw('COUNT(DISTINCT proyectos.id_proyecto) AS total_proyectos')
+            ->selectRaw('MAX(COALESCE(proyectos.updated_at, participaciones.updated_at)) AS proyectos_actualizados')
+            ->where('participaciones.visibilidad', 'publico')
+            ->whereNull('participaciones.deleted_at')
+            ->whereNull('proyectos.deleted_at')
+            ->groupBy('participaciones.id_usuario');
 
         return Usuario::query()
             ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
@@ -174,7 +169,7 @@ class HomePortfolioService
                 $join->on('habilidades_publicas.usuario_id', '=', 'usuarios.id_usuario');
             })
             ->leftJoinSub($projectTotals, 'proyectos_publicos', function ($join) {
-                $join->on('proyectos_publicos.usuario_id', '=', 'usuarios.id_usuario');
+                $join->on('proyectos_publicos.id_usuario', '=', 'usuarios.id_usuario');
             })
             ->where('usuarios.estado', 'activo')
             ->whereRaw('perfiles.es_publico = true')

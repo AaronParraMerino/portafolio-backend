@@ -43,6 +43,8 @@ class ProfileService
             'pais' => $perfil?->pais,
             'foto_perfil' => $perfil?->foto_perfil,
             'foto_fondo' => $perfil?->foto_fondo,
+            'es_publico' => (bool) ($perfil?->es_publico ?? true),
+            'portfolio_publico' => (bool) ($perfil?->es_publico ?? true),
 
             'visibilidad' => [
                 'nombre' => true,
@@ -201,18 +203,30 @@ class ProfileService
 
     public function updatePortfolioVisibility(int $userId, bool $isPublic): array
     {
-        $perfil = Perfil::firstOrCreate(
-            ['usuario_id' => $userId],
-            ['es_publico' => $isPublic]
-        );
+        $perfil = Perfil::where('usuario_id', $userId)->first();
 
-        if ($perfil->es_publico !== $isPublic) {
-            $perfil->update(['es_publico' => $isPublic]);
+        if (! $perfil) {
+            DB::table('perfiles')->insert([
+                'usuario_id' => $userId,
+                'es_publico' => DB::raw($isPublic ? 'true' : 'false'),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } elseif ((bool) $perfil->es_publico !== $isPublic) {
+            DB::table('perfiles')
+                ->where('id_perfil', $perfil->id_perfil)
+                ->update([
+                    'es_publico' => DB::raw($isPublic ? 'true' : 'false'),
+                    'updated_at' => now(),
+                ]);
         }
+
+        $perfil = Perfil::where('usuario_id', $userId)->firstOrFail();
 
         return [
             'user_id' => $userId,
-            'portfolio_publico' => $perfil->es_publico,
+            'portfolio_publico' => (bool) $perfil->es_publico,
+            'es_publico' => (bool) $perfil->es_publico,
         ];
     }
 
@@ -465,8 +479,6 @@ class ProfileService
         }
     }
 }
-
-
 
 
 

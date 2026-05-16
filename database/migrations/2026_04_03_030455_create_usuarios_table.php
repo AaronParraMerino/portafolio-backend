@@ -17,8 +17,8 @@ return new class extends Migration
             $table->string('password');
             $table->string('telefono')->nullable();
 
-            $table->enum('rol', ['admin', 'usuario']);
-            $table->enum('estado', ['activo', 'bloqueado']);
+            $table->enum('rol', ['admin', 'usuario', 'otro']);
+            $table->enum('estado', ['activo', 'bloqueado', 'inactivo', 'pausado']);
 
             $table->integer('intentos_fallidos')->default(0);
             $table->timestamp('fecha_bloqueo')->nullable();
