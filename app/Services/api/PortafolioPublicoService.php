@@ -230,6 +230,7 @@ class PortafolioPublicoService
             ->filter()
             ->values();
 
+        $participantes = $this->getParticipantesValidados($id);
         $participantesCount = DB::table('participaciones')
             ->where('id_proyecto', $id)
             ->whereNull('deleted_at')
@@ -245,6 +246,7 @@ class PortafolioPublicoService
             'etiquetas' => $tecnologiaNombres->all(),
             'tecnologias' => $tecnologiaNombres->all(),
             'tecnologias_detalle' => $tecnologias->map(fn ($tech) => (array) $tech)->all(),
+            'participantes' => $participantes,
             'participantes_count' => $participantesCount,
             'participacion' => [
                 'rol' => $project['rol'] ?? null,
@@ -255,6 +257,109 @@ class PortafolioPublicoService
             ],
             'evidencias' => $evidencias,
         ];
+    }
+
+    private function getParticipantesValidados(int $projectId): array
+    {
+        $repos = DB::table('proyecto_repositorios as pr')
+            ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->where('pr.id_proyecto', $projectId)
+            ->where('pr.proveedor', 'github')
+            ->whereNull('pr.deleted_at')
+            ->select('rg.id_repositorio_github')
+            ->get();
+
+        $repoGithubIds = $repos
+            ->pluck('id_repositorio_github')
+            ->filter()
+            ->values();
+
+        $rows = DB::table('participaciones as p')
+            ->join('usuarios as u', 'u.id_usuario', '=', 'p.id_usuario')
+            ->leftJoin('perfiles as pe', 'pe.usuario_id', '=', 'u.id_usuario')
+            ->leftJoin('cuentas_oauth as co', function ($join) {
+                $join->on('co.usuario_id', '=', 'u.id_usuario')
+                    ->where('co.provider', '=', 'github');
+            })
+            ->where('p.id_proyecto', $projectId)
+            ->whereNull('p.deleted_at')
+            ->select(
+                'p.id_participacion',
+                'p.id_usuario',
+                'p.rol',
+                'p.descripcion_aporte',
+                'p.es_propietario',
+                'p.participacion_validada',
+                'u.nombre',
+                'u.apellido',
+                'u.correo',
+                'pe.foto_perfil',
+                'co.id_cuenta_oauth',
+                'co.provider_user_id',
+                'co.nombre as github_nombre',
+                'co.foto_url as github_foto_url'
+            )
+            ->get();
+
+        $userIds = $rows->pluck('id_usuario')->filter()->values();
+        $validaciones = $repoGithubIds->isEmpty() || $userIds->isEmpty()
+            ? collect()
+            : DB::table('usuario_repositorio_validaciones')
+                ->whereIn('id_usuario', $userIds->all())
+                ->whereIn('id_repositorio_github', $repoGithubIds->all())
+                ->get()
+                ->groupBy('id_usuario');
+
+        return $rows
+            ->map(function ($row) use ($validaciones) {
+                $userValidaciones = $validaciones->get($row->id_usuario, collect());
+                $validacion = $userValidaciones->first(fn ($item) => (bool) $item->validado)
+                    ?? $userValidaciones->first();
+                $validado = (bool) ($validacion?->validado ?? $row->participacion_validada ?? false);
+
+                if (! $validado) {
+                    return null;
+                }
+
+                return [
+                    'id' => 'participacion-' . $row->id_participacion,
+                    'id_participacion' => (int) $row->id_participacion,
+                    'id_usuario' => (int) $row->id_usuario,
+                    'nombre' => trim(($row->nombre ?? '') . ' ' . ($row->apellido ?? '')),
+                    'email' => $row->correo,
+                    'rol' => $row->rol,
+                    'descripcion_aporte' => $row->descripcion_aporte,
+                    'es_propietario' => (bool) $row->es_propietario,
+                    'foto_perfil' => $row->foto_perfil,
+                    'github_avatar_url' => $row->github_foto_url,
+                    'avatar_url' => $row->foto_perfil ?: $row->github_foto_url,
+                    'source' => 'sistema',
+                    'tipo_participante' => 'usuario_github_validado',
+                    'origen_participante' => 'usuario_github_validado',
+                    'tiene_cuenta' => true,
+                    'tiene_vinculacion_github' => ! is_null($row->id_cuenta_oauth),
+                    'validacion_github' => true,
+                    'github_id' => $row->provider_user_id,
+                    'github_username' => $row->github_nombre,
+                    'validacion' => [
+                        'validado' => true,
+                        'relacion_github' => $validacion->relacion_github ?? 'unknown',
+                        'es_propietario' => (bool) ($validacion->es_propietario ?? false),
+                        'ultima_verificacion_at' => $validacion->ultima_verificacion_at ?? null,
+                    ],
+                ];
+            })
+            ->filter()
+            ->unique(fn ($item) => ! empty($item['id_usuario'])
+                ? 'usuario:' . $item['id_usuario']
+                : 'github-id:' . ($item['github_id'] ?? $item['id'])
+            )
+            ->sortBy([
+                fn ($a, $b) => ((bool) ($b['es_propietario'] ?? false)) <=> ((bool) ($a['es_propietario'] ?? false)),
+                fn ($a, $b) => strcmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')),
+            ])
+            ->values()
+            ->all();
     }
 
     private function visible(array $visibilidadRaw, string $campo): bool
