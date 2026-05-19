@@ -462,7 +462,7 @@ private function buildOauthAccountPayload(
         'foto_url' => $fotoUrl,
     ];
 
-    if ($provider !== 'github' || ! is_array($oauthMeta)) {
+    if (! in_array($provider, ['github', 'gitlab'], true) || ! is_array($oauthMeta)) {
         return $payload;
     }
 
