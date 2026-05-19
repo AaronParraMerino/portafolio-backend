@@ -9,6 +9,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/github/unlink', [GithubAuthController::class, 'unlink']);
 
     Route::post('/github/repos/sync', [GithubAuthController::class, 'syncRepos']);
+    Route::get('/github/repos/detected/count', [GithubAuthController::class, 'detectedReposCount']);
     Route::get('/github/repos/detected', [GithubAuthController::class, 'detectedRepos']);
     Route::post('/github/repos/languages', [GithubAuthController::class, 'repoLanguages']);
     Route::post('/github/repos/attach-to-project', [GithubAuthController::class, 'attachDetectedReposToProject']);

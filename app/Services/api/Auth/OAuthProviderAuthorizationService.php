@@ -20,7 +20,7 @@ class OAuthProviderAuthorizationService
         ],
         'gitlab' => [
             'url' => 'https://gitlab.com/oauth/authorize',
-            'params' => ['response_type' => 'code', 'scope' => 'read_user'],
+            'params' => ['response_type' => 'code', 'scope' => 'read_user read_api'],
         ],
         'discord' => [
             'url' => 'https://discord.com/api/oauth2/authorize',

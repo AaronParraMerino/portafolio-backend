@@ -59,6 +59,113 @@ class TecnologiaService
         ];
     }
 
+    public function agregarBasicaPorNombre(string $nombre, string $tipo = 'lenguaje'): array
+    {
+        $nombreBuscado = trim($nombre);
+
+        $existente = $this->buscarTecnologiaFlexible($nombreBuscado, true);
+        $datosConocidos = $this->datosTecnologiaConocida($nombreBuscado, $tipo);
+
+        if ($existente) {
+            if ($existente->trashed()) {
+                $existente->restore();
+            }
+
+            if ($datosConocidos) {
+                $existente->fill($datosConocidos)->save();
+            }
+
+            return [
+                'creado' => false,
+                'tecnologia' => $existente->fresh(),
+            ];
+        }
+
+        $tecnologia = Tecnologia::create($datosConocidos ?: [
+            'nombre' => $this->formatearNombreBasico($nombreBuscado),
+            'tipo' => $tipo,
+            'icono_url' => null,
+            'color' => null,
+            'descripcion' => 'Tecnologia detectada automaticamente desde un repositorio GitHub.',
+        ]);
+
+        return [
+            'creado' => true,
+            'tecnologia' => $tecnologia,
+        ];
+    }
+
+    private function datosTecnologiaConocida(string $nombre, string $tipo = 'lenguaje'): ?array
+    {
+        $key = $this->normalizar($nombre);
+
+        $known = [
+            'html' => [
+                'nombre' => 'HTML',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/html5/html5-original.svg',
+                'color' => '#E34F26',
+            ],
+            'html5' => [
+                'nombre' => 'HTML',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/html5/html5-original.svg',
+                'color' => '#E34F26',
+            ],
+            'css' => [
+                'nombre' => 'CSS',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/css3/css3-original.svg',
+                'color' => '#1572B6',
+            ],
+            'css3' => [
+                'nombre' => 'CSS',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/css3/css3-original.svg',
+                'color' => '#1572B6',
+            ],
+            'javascript' => [
+                'nombre' => 'JavaScript',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/javascript/javascript-original.svg',
+                'color' => '#F7DF1E',
+            ],
+            'js' => [
+                'nombre' => 'JavaScript',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/javascript/javascript-original.svg',
+                'color' => '#F7DF1E',
+            ],
+            'typescript' => [
+                'nombre' => 'TypeScript',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/typescript/typescript-original.svg',
+                'color' => '#3178C6',
+            ],
+            'ts' => [
+                'nombre' => 'TypeScript',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/typescript/typescript-original.svg',
+                'color' => '#3178C6',
+            ],
+            'php' => [
+                'nombre' => 'PHP',
+                'tipo' => 'lenguaje',
+                'icono_url' => 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/php/php-original.svg',
+                'color' => '#777BB4',
+            ],
+        ];
+
+        if (! isset($known[$key])) {
+            return null;
+        }
+
+        return [
+            ...$known[$key],
+            'descripcion' => 'Tecnologia detectada automaticamente desde un repositorio GitHub.',
+        ];
+    }
+
     public function actualizarPorNombre(string $nombre, array $datos): ?Tecnologia
     {
         $tecnologia = $this->buscarTecnologiaFlexible($nombre);

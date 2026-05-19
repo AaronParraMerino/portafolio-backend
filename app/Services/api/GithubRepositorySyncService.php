@@ -7,11 +7,14 @@ use App\Models\ParticipacionRepositorio;
 use App\Models\ProyectoRepositorio;
 use App\Models\RepositorioGithub;
 use App\Models\UsuarioRepositorioValidacion;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class GithubRepositorySyncService
 {
+    private const MAX_DETAILED_REPOS_PER_SYNC = 15;
+
     public function findExistingProjectForJoinableRepoUrls(int $usuarioId, array $repoUrls): array
     {
         foreach ($repoUrls as $url) {
@@ -111,7 +114,21 @@ class GithubRepositorySyncService
             ];
         }
 
-        $publicResponse = Http::timeout(20)
+        $cacheKey = $this->repoLanguagesCacheKey($usuarioId, $repo);
+        $cachedLanguages = Cache::get($cacheKey);
+
+        if (is_array($cachedLanguages)) {
+            return [
+                'status' => 'success',
+                'owner' => $repo['owner'],
+                'repo' => $repo['name'],
+                'authenticated' => false,
+                'cached' => true,
+                'languages' => array_values($cachedLanguages),
+            ];
+        }
+
+        $publicResponse = Http::timeout(8)
             ->withHeaders([
                 'Accept' => 'application/vnd.github+json',
                 'X-GitHub-Api-Version' => '2022-11-28',
@@ -120,7 +137,7 @@ class GithubRepositorySyncService
             ->get("https://api.github.com/repos/{$repo['owner']}/{$repo['name']}/languages");
 
         if ($publicResponse->ok()) {
-            return $this->formatLanguagesResponse($repo, $publicResponse->json(), false);
+            return $this->formatLanguagesResponse($repo, $publicResponse->json(), false, $cacheKey);
         }
 
         $cuentaGithub = CuentaOauth::where('usuario_id', $usuarioId)
@@ -141,7 +158,7 @@ class GithubRepositorySyncService
             ];
         }
 
-        $response = Http::timeout(20)
+        $response = Http::timeout(8)
             ->withHeaders([
                 'Authorization' => "Bearer {$cuentaGithub->access_token}",
                 'Accept' => 'application/vnd.github+json',
@@ -178,19 +195,29 @@ class GithubRepositorySyncService
             $payload = [];
         }
 
+        $languages = array_values(array_keys($payload));
+        Cache::put($cacheKey, $languages, now()->addHours(6));
+
         return [
             'status' => 'success',
             'owner' => $repo['owner'],
             'repo' => $repo['name'],
             'authenticated' => true,
-            'languages' => array_values(array_keys($payload)),
+            'cached' => false,
+            'languages' => $languages,
         ];
     }
 
-    private function formatLanguagesResponse(array $repo, mixed $payload, bool $authenticated): array
+    private function formatLanguagesResponse(array $repo, mixed $payload, bool $authenticated, ?string $cacheKey = null): array
     {
         if (! is_array($payload)) {
             $payload = [];
+        }
+
+        $languages = array_values(array_keys($payload));
+
+        if ($cacheKey) {
+            Cache::put($cacheKey, $languages, now()->addHours(6));
         }
 
         return [
@@ -198,8 +225,14 @@ class GithubRepositorySyncService
             'owner' => $repo['owner'],
             'repo' => $repo['name'],
             'authenticated' => $authenticated,
-            'languages' => array_values(array_keys($payload)),
+            'cached' => false,
+            'languages' => $languages,
         ];
+    }
+
+    private function repoLanguagesCacheKey(int $usuarioId, array $repo): string
+    {
+        return 'github_repo_languages:' . $usuarioId . ':' . sha1(strtolower($repo['owner'] . '/' . $repo['name']));
     }
 
     public function syncProjectRepoUrlsForUsuario(int $usuarioId, int $idProyecto, array $repoUrls): array
@@ -209,6 +242,10 @@ class GithubRepositorySyncService
             ->map(fn ($url) => trim((string) $url))
             ->unique()
             ->values();
+
+        $cuentaGithub = CuentaOauth::where('usuario_id', $usuarioId)
+            ->where('provider', 'github')
+            ->first();
 
         $validatedRepos = [];
 
@@ -287,7 +324,12 @@ class GithubRepositorySyncService
         }
 
         foreach ($validatedRepos as $validatedRepo) {
-            $saveResult = $this->saveGithubRepoForProject($idProyecto, $validatedRepo['url'], $validatedRepo['repo']);
+            $saveResult = $this->saveGithubRepoForProject(
+                $idProyecto,
+                $validatedRepo['url'],
+                $validatedRepo['repo'],
+                $cuentaGithub?->access_token,
+            );
 
             if (($saveResult['status'] ?? null) === 'linked_existing_project') {
                 $linkResult = $this->linkUsuarioToExistingProjectByRepo($usuarioId, (int) $saveResult['id_proyecto']);
@@ -420,7 +462,7 @@ class GithubRepositorySyncService
             ->get("https://api.github.com/repos/{$repo['owner']}/{$repo['name']}");
     }
 
-    private function saveGithubRepoForProject(int $idProyecto, string $url, array $repo): array
+    private function saveGithubRepoForProject(int $idProyecto, string $url, array $repo, ?string $accessToken = null): array
     {
         $githubRepoId = $repo['id'] ?? null;
         $proyectoRepo = ProyectoRepositorio::withTrashed()
@@ -461,6 +503,8 @@ class GithubRepositorySyncService
             'id_proyecto_repositorio' => $proyectoRepo->id_proyecto_repositorio,
         ]);
 
+        $shouldRefreshDetails = $this->shouldRefreshGithubRepoDetails($githubRepo, $repo);
+
         $githubRepo->github_repo_id = $repo['id'] ?? null;
         $githubRepo->github_owner = $repo['owner']['login'] ?? null;
         $githubRepo->github_repo_name = $repo['name'] ?? null;
@@ -476,6 +520,11 @@ class GithubRepositorySyncService
         $githubRepo->last_push_at = $repo['pushed_at'] ?? null;
         $githubRepo->repo_created_at = $repo['created_at'] ?? null;
         $githubRepo->repo_updated_at = $repo['updated_at'] ?? null;
+
+        if ($shouldRefreshDetails) {
+            $this->fillGithubRepoDetails($githubRepo, $repo, $accessToken);
+        }
+
         $githubRepo->sync_status = 'sincronizado';
         $githubRepo->sync_error = null;
         $githubRepo->last_sync_at = now();
@@ -798,6 +847,8 @@ class GithubRepositorySyncService
         $repos = $reposResponse['repos'];
         $created = 0;
         $updated = 0;
+        $detailsUpdated = 0;
+        $detailsSkipped = 0;
 
         foreach ($repos as $repo) {
             $url = trim((string) ($repo['html_url'] ?? ''));
@@ -840,6 +891,8 @@ class GithubRepositorySyncService
                 'id_proyecto_repositorio' => $proyectoRepo->id_proyecto_repositorio,
             ]);
 
+            $shouldRefreshDetails = $this->shouldRefreshGithubRepoDetails($githubRepo, $repo);
+
             $githubRepo->github_repo_id = $repo['id'] ?? null;
             $githubRepo->github_owner = $repo['owner']['login'] ?? null;
             $githubRepo->github_repo_name = $repo['name'] ?? null;
@@ -855,6 +908,14 @@ class GithubRepositorySyncService
             $githubRepo->last_push_at = $repo['pushed_at'] ?? null;
             $githubRepo->repo_created_at = $repo['created_at'] ?? null;
             $githubRepo->repo_updated_at = $repo['updated_at'] ?? null;
+
+            if ($shouldRefreshDetails && $detailsUpdated < self::MAX_DETAILED_REPOS_PER_SYNC) {
+                $this->fillGithubRepoDetails($githubRepo, $repo, $cuentaGithub->access_token);
+                $detailsUpdated++;
+            } elseif ($shouldRefreshDetails) {
+                $detailsSkipped++;
+            }
+
             $githubRepo->sync_status = 'sincronizado';
             $githubRepo->sync_error = null;
             $githubRepo->last_sync_at = now();
@@ -900,8 +961,151 @@ class GithubRepositorySyncService
                 'total_remotos' => count($repos),
                 'creados' => $created,
                 'actualizados' => $updated,
+                'detalles_actualizados' => $detailsUpdated,
+                'detalles_omitidos_por_limite' => $detailsSkipped,
             ],
         ];
+    }
+
+    private function fillGithubRepoDetails(RepositorioGithub $githubRepo, array $repo, ?string $accessToken = null): void
+    {
+        $owner = (string) ($repo['owner']['login'] ?? '');
+        $name = (string) ($repo['name'] ?? '');
+        $branch = (string) ($repo['default_branch'] ?? '');
+
+        if ($owner === '' || $name === '') {
+            return;
+        }
+
+        $commitsResponse = $this->fetchGithubRepoEndpoint($owner, $name, 'commits', $accessToken, [
+            'sha' => $branch !== '' ? $branch : null,
+            'per_page' => 1,
+        ]);
+
+        if ($commitsResponse->ok()) {
+            $commits = $commitsResponse->json();
+            $latestCommit = is_array($commits) ? ($commits[0] ?? null) : null;
+
+            $githubRepo->commits_count = $this->resolveGithubPaginatedCount($commitsResponse, $commits);
+
+            if (is_array($latestCommit)) {
+                $githubRepo->last_commit_message = $latestCommit['commit']['message'] ?? null;
+                $githubRepo->last_commit_date = $latestCommit['commit']['committer']['date']
+                    ?? $latestCommit['commit']['author']['date']
+                    ?? null;
+            }
+        }
+
+        $contributorsResponse = $this->fetchGithubRepoEndpoint($owner, $name, 'contributors', $accessToken, [
+            'anon' => 'true',
+            'per_page' => 1,
+        ]);
+
+        if ($contributorsResponse->ok()) {
+            $contributors = $contributorsResponse->json();
+            $githubRepo->contributors_count = $this->resolveGithubPaginatedCount($contributorsResponse, $contributors);
+        }
+
+        $readmeResponse = $this->fetchGithubRepoEndpoint($owner, $name, 'readme', $accessToken);
+
+        if ($readmeResponse->ok()) {
+            $readme = $readmeResponse->json();
+            $githubRepo->readme_resumen = $this->formatGithubReadmeResumen($readme['content'] ?? null);
+        }
+    }
+
+    private function shouldRefreshGithubRepoDetails(RepositorioGithub $githubRepo, array $repo): bool
+    {
+        if (! $githubRepo->exists) {
+            return true;
+        }
+
+        if (
+            is_null($githubRepo->commits_count)
+            || is_null($githubRepo->contributors_count)
+            || is_null($githubRepo->last_commit_message)
+            || is_null($githubRepo->last_commit_date)
+            || is_null($githubRepo->readme_resumen)
+        ) {
+            return true;
+        }
+
+        $remotePushedAt = $this->normalizeGithubTimestamp($repo['pushed_at'] ?? null);
+        $localPushedAt = $this->normalizeGithubTimestamp($githubRepo->last_push_at);
+
+        if ($remotePushedAt && $localPushedAt && $remotePushedAt !== $localPushedAt) {
+            return true;
+        }
+
+        $remoteUpdatedAt = $this->normalizeGithubTimestamp($repo['updated_at'] ?? null);
+        $localUpdatedAt = $this->normalizeGithubTimestamp($githubRepo->repo_updated_at);
+
+        return $remoteUpdatedAt && $localUpdatedAt && $remoteUpdatedAt !== $localUpdatedAt;
+    }
+
+    private function normalizeGithubTimestamp(mixed $value): ?string
+    {
+        if (! $value) {
+            return null;
+        }
+
+        $timestamp = strtotime((string) $value);
+
+        return $timestamp ? gmdate('Y-m-d\TH:i:s\Z', $timestamp) : null;
+    }
+
+    private function fetchGithubRepoEndpoint(
+        string $owner,
+        string $name,
+        string $endpoint,
+        ?string $accessToken = null,
+        array $query = [],
+    ): \Illuminate\Http\Client\Response {
+        $headers = [
+            'Accept' => 'application/vnd.github+json',
+            'X-GitHub-Api-Version' => '2022-11-28',
+            'User-Agent' => 'portafolio-app',
+        ];
+
+        if ($accessToken) {
+            $headers['Authorization'] = "Bearer {$accessToken}";
+        }
+
+        $query = array_filter($query, fn ($value) => ! is_null($value));
+
+        return Http::timeout(10)
+            ->withHeaders($headers)
+            ->get("https://api.github.com/repos/{$owner}/{$name}/{$endpoint}", $query);
+    }
+
+    private function resolveGithubPaginatedCount(\Illuminate\Http\Client\Response $response, mixed $payload): int
+    {
+        $link = (string) $response->header('Link', '');
+
+        if (preg_match('/[?&]page=(\d+)>;\s*rel="last"/', $link, $matches)) {
+            return (int) $matches[1];
+        }
+
+        return is_array($payload) ? count($payload) : 0;
+    }
+
+    private function formatGithubReadmeResumen(mixed $content): ?string
+    {
+        if (! is_string($content) || trim($content) === '') {
+            return null;
+        }
+
+        $decoded = base64_decode(preg_replace('/\s+/', '', $content) ?? '', true);
+
+        if (! is_string($decoded) || trim($decoded) === '') {
+            return null;
+        }
+
+        $plain = preg_replace('/[`*_>#\[\]()~-]+/', ' ', $decoded) ?? $decoded;
+        $plain = preg_replace('/\s+/', ' ', $plain) ?? $plain;
+        $plain = trim($plain);
+
+        return $plain === '' ? null : mb_substr($plain, 0, 1200);
     }
 
     private function fetchAllGithubRepos(string $accessToken): array
