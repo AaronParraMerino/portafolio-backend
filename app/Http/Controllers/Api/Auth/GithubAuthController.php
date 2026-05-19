@@ -2,8 +2,6 @@
 
 namespace App\Http\Controllers\Api\Auth;
 
-use App\Models\ProyectoRepositorio;
-use App\Models\UsuarioRepositorioValidacion;
 use App\Services\api\Auth\OAuthProviderAuthorizationService;
 use App\Services\api\AuthService;
 use App\Services\api\GithubRepositorySyncService;
@@ -58,109 +56,196 @@ class GithubAuthController extends ProviderOAuthController
 
         $refresh = filter_var($request->query('refresh', false), FILTER_VALIDATE_BOOLEAN);
 
-        if ($refresh) {
-            $sync = $this->githubRepositorySyncService->syncForUsuario((int) $user->id_usuario);
-
-            if (($sync['status'] ?? 'error') !== 'success') {
-                return match ($sync['status'] ?? 'error') {
-                    'not_linked' => response()->json($sync, 404),
-                    'missing_token' => response()->json($sync, 422),
-                    'invalid_token' => response()->json($sync, 401),
-                    default => response()->json($sync, 502),
-                };
-            }
+        if ($refreshResponse = $this->refreshGithubReposIfRequested((int) $user->id_usuario, $refresh)) {
+            return $refreshResponse;
         }
 
-        $repos = ProyectoRepositorio::query()
-            ->with('github')
-            ->where('proveedor', 'github')
-            ->whereHas('github')
-            ->orderByDesc('updated_at')
-            ->get()
-            ->map(function ($repo) use ($user) {
-                $github = $repo->github;
+        $repos = $this->getDetectedReposForUsuario((int) $user->id_usuario);
 
-                $validacion = UsuarioRepositorioValidacion::query()
-                    ->where('id_usuario', $user->id_usuario)
-                    ->where('id_repositorio_github', $github->id_repositorio_github)
-                    ->first();
+        return response()->json([
+            'status' => 'success',
+            'data' => $repos,
+        ]);
+    }
 
-                $participacion = null;
-                $proyecto = null;
+    public function detectedReposCount(Request $request): JsonResponse
+    {
+        $user = $request->user();
 
-                if ($repo->id_proyecto) {
-                    $participacion = DB::table('participaciones')
-                        ->where('id_usuario', $user->id_usuario)
-                        ->where('id_proyecto', $repo->id_proyecto)
-                        ->whereNull('deleted_at')
-                        ->first();
+        if (! $user) {
+            return response()->json(['message' => 'No hay sesion activa'], 401);
+        }
 
-                    $proyecto = DB::table('proyectos')
-                        ->where('id_proyecto', $repo->id_proyecto)
-                        ->whereNull('deleted_at')
-                        ->select('id_proyecto', 'titulo', 'descripcion', 'estado_publicacion', 'estado_desarrollo')
-                        ->first();
-                }
+        $refresh = filter_var($request->query('refresh', false), FILTER_VALIDATE_BOOLEAN);
 
-                $repoEnUso = ! is_null($repo->id_proyecto);
-                $validado = (bool) ($validacion->validado ?? false);
-                $permiteSinValidacion = false;
+        if ($refreshResponse = $this->refreshGithubReposIfRequested((int) $user->id_usuario, $refresh)) {
+            return $refreshResponse;
+        }
 
-                if ($repoEnUso) {
-                    $permiteSinValidacion = in_array(strtolower((string) DB::table('proyecto_configuraciones')
-                        ->where('id_proyecto', $repo->id_proyecto)
-                        ->value('permitir_participantes_sin_validacion')), ['1', 't', 'true', 'yes', 'on'], true);
-                }
+        return response()->json([
+            'status' => 'success',
+            'count' => $this->getDetectedReposForUsuario((int) $user->id_usuario, true),
+        ]);
+    }
+
+    private function refreshGithubReposIfRequested(int $usuarioId, bool $refresh): ?JsonResponse
+    {
+        if (! $refresh) {
+            return null;
+        }
+
+        $sync = $this->githubRepositorySyncService->syncForUsuario($usuarioId);
+
+        if (($sync['status'] ?? 'error') === 'success') {
+            return null;
+        }
+
+        return match ($sync['status'] ?? 'error') {
+            'not_linked' => response()->json($sync, 404),
+            'missing_token' => response()->json($sync, 422),
+            'invalid_token' => response()->json($sync, 401),
+            default => response()->json($sync, 502),
+        };
+    }
+
+    private function getDetectedReposForUsuario(int $usuarioId, bool $countOnly = false): mixed
+    {
+        $query = DB::table('proyecto_repositorios as pr')
+            ->join('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->leftJoin('usuario_repositorio_validaciones as urv', function ($join) use ($usuarioId) {
+                $join->on('urv.id_repositorio_github', '=', 'rg.id_repositorio_github')
+                    ->where('urv.id_usuario', '=', $usuarioId);
+            })
+            ->leftJoin('proyectos as p', function ($join) {
+                $join->on('p.id_proyecto', '=', 'pr.id_proyecto')
+                    ->whereNull('p.deleted_at');
+            })
+            ->leftJoin('participaciones as pa', function ($join) use ($usuarioId) {
+                $join->on('pa.id_proyecto', '=', 'pr.id_proyecto')
+                    ->where('pa.id_usuario', '=', $usuarioId)
+                    ->whereNull('pa.deleted_at');
+            })
+            ->leftJoin('proyecto_configuraciones as pc', 'pc.id_proyecto', '=', 'pr.id_proyecto')
+            ->where('pr.proveedor', 'github')
+            ->whereNull('pr.deleted_at')
+            ->where(function ($query) {
+                $query->whereRaw('urv.validado = TRUE')
+                    ->orWhereNotNull('pr.id_proyecto');
+            })
+            ->where(function ($query) {
+                $query->whereNull('pr.id_proyecto')
+                    ->orWhere(function ($projectQuery) {
+                        $projectQuery->whereNotNull('p.id_proyecto')
+                            ->whereNull('pa.id_participacion');
+                    });
+            })
+            ->orderByDesc('pr.updated_at');
+
+        if ($countOnly) {
+            return $query
+                ->select([
+                    'pr.id_proyecto',
+                    'urv.validado',
+                    'pc.permitir_participantes_sin_validacion',
+                ])
+                ->get()
+                ->filter(function ($row) {
+                    $repoEnUso = ! is_null($row->id_proyecto);
+                    $validado = $this->databaseBool($row->validado ?? false);
+                    $permiteSinValidacion = $repoEnUso
+                        && $this->databaseBool($row->permitir_participantes_sin_validacion ?? false);
+
+                    return $validado || ($repoEnUso && $permiteSinValidacion);
+                })
+                ->count();
+        }
+
+        $rows = $query
+            ->select([
+                'pr.id_proyecto_repositorio',
+                'pr.id_proyecto',
+                'pr.nombre',
+                'pr.url_repositorio',
+                'pr.descripcion',
+                'pr.tipo',
+                'rg.id_repositorio_github',
+                'rg.github_repo_id',
+                'rg.github_owner',
+                'rg.github_repo_name',
+                'rg.is_private',
+                'rg.is_archived',
+                'rg.last_push_at',
+                'rg.stars_count',
+                'urv.validado',
+                'urv.relacion_github',
+                'urv.es_propietario',
+                'urv.ultima_verificacion_at',
+                'pc.permitir_participantes_sin_validacion',
+                'p.titulo as proyecto_titulo',
+                'p.descripcion as proyecto_descripcion',
+                'p.estado_publicacion as proyecto_estado_publicacion',
+                'p.estado_desarrollo as proyecto_estado_desarrollo',
+            ])
+            ->get();
+
+        $repos = $rows
+            ->map(function ($row) {
+                $repoEnUso = ! is_null($row->id_proyecto);
+                $validado = $this->databaseBool($row->validado ?? false);
+                $permiteSinValidacion = $repoEnUso
+                    && $this->databaseBool($row->permitir_participantes_sin_validacion ?? false);
 
                 if (! $validado && ! ($repoEnUso && $permiteSinValidacion)) {
                     return null;
                 }
 
-                if ($repoEnUso && ($participacion || ! $proyecto || (! $validado && ! $permiteSinValidacion))) {
-                    return null;
-                }
-
                 return [
-                    'id_proyecto_repositorio' => $repo->id_proyecto_repositorio,
-                    'id_proyecto' => $repo->id_proyecto,
-                    'nombre' => $repo->nombre,
-                    'url_repositorio' => $repo->url_repositorio,
-                    'descripcion' => $repo->descripcion,
-                    'tipo' => $repo->tipo,
+                    'id_proyecto_repositorio' => $row->id_proyecto_repositorio,
+                    'id_proyecto' => $row->id_proyecto,
+                    'nombre' => $row->nombre,
+                    'url_repositorio' => $row->url_repositorio,
+                    'descripcion' => $row->descripcion,
+                    'tipo' => $row->tipo,
                     'estado_vinculacion' => $repoEnUso ? 'en_uso' : 'libre',
-                    'puede_unirse' => $repoEnUso && ($validado || $permiteSinValidacion) && ! $participacion,
-                    'proyecto' => $proyecto ? [
-                        'id_proyecto' => $proyecto->id_proyecto,
-                        'titulo' => $proyecto->titulo,
-                        'descripcion' => $proyecto->descripcion,
-                        'estado_publicacion' => $proyecto->estado_publicacion,
-                        'estado_desarrollo' => $proyecto->estado_desarrollo,
+                    'puede_unirse' => $repoEnUso && ($validado || $permiteSinValidacion),
+                    'proyecto' => $repoEnUso ? [
+                        'id_proyecto' => $row->id_proyecto,
+                        'titulo' => $row->proyecto_titulo,
+                        'descripcion' => $row->proyecto_descripcion,
+                        'estado_publicacion' => $row->proyecto_estado_publicacion,
+                        'estado_desarrollo' => $row->proyecto_estado_desarrollo,
                     ] : null,
                     'repo_github' => [
-                        'id_repositorio_github' => $github->id_repositorio_github,
-                        'github_repo_id' => $github->github_repo_id,
-                        'owner' => $github->github_owner,
-                        'repo_name' => $github->github_repo_name,
-                        'is_private' => $github->is_private,
-                        'is_archived' => $github->is_archived,
-                        'last_push_at' => $github->last_push_at,
-                        'stars_count' => $github->stars_count,
+                        'id_repositorio_github' => $row->id_repositorio_github,
+                        'github_repo_id' => $row->github_repo_id,
+                        'owner' => $row->github_owner,
+                        'repo_name' => $row->github_repo_name,
+                        'is_private' => $this->databaseBool($row->is_private ?? false),
+                        'is_archived' => $this->databaseBool($row->is_archived ?? false),
+                        'last_push_at' => $row->last_push_at,
+                        'stars_count' => $row->stars_count,
                     ],
                     'validacion' => [
-                        'validado' => (bool) ($validacion->validado ?? false),
-                        'relacion_github' => $validacion->relacion_github ?? 'unknown',
-                        'es_propietario' => (bool) ($validacion->es_propietario ?? false),
-                        'ultima_verificacion_at' => $validacion->ultima_verificacion_at ?? null,
+                        'validado' => $validado,
+                        'relacion_github' => $row->relacion_github ?? 'unknown',
+                        'es_propietario' => $this->databaseBool($row->es_propietario ?? false),
+                        'ultima_verificacion_at' => $row->ultima_verificacion_at ?? null,
                     ],
                 ];
             })
             ->filter()
             ->values();
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $repos,
-        ]);
+        return $repos;
+    }
+
+    private function databaseBool(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        return in_array(strtolower((string) $value), ['1', 't', 'true', 'yes', 'on'], true);
     }
 
     public function repoLanguages(Request $request): JsonResponse
