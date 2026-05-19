@@ -1369,10 +1369,19 @@ class ProyectoController extends Controller
                 'updated_at' => now(),
             ]);
 
+        $githubUrls = collect($payload['url_repositorios'] ?? [])
+            ->filter(fn ($url) => is_string($url) && str_contains(strtolower($url), 'github.com/'))
+            ->values()
+            ->all();
+
+        if (empty($githubUrls)) {
+            return;
+        }
+
         $result = $this->githubRepositorySyncService->syncProjectRepoUrlsForUsuario(
             $userId,
             $idProyecto,
-            $payload['url_repositorios'] ?? [],
+            $githubUrls,
         );
 
         if (($result['status'] ?? 'error') !== 'success') {
