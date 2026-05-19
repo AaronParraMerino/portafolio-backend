@@ -22,7 +22,8 @@ class GitlabOAuthService
             return ['status' => 'invalid'];
         }
 
-        $accessToken = $tokenResponse->json()['access_token'] ?? null;
+        $tokenPayload = $tokenResponse->json();
+        $accessToken = $tokenPayload['access_token'] ?? null;
         if (! $accessToken) {
             return ['status' => 'invalid'];
         }
@@ -49,6 +50,15 @@ class GitlabOAuthService
             'email' => $email,
             'nombre' => $userData['name'] ?? null,
             'foto_url' => $userData['avatar_url'] ?? null,
+            'oauth_meta' => [
+                'access_token' => $accessToken,
+                'refresh_token' => $tokenPayload['refresh_token'] ?? null,
+                'token_scopes' => $tokenPayload['scope'] ?? null,
+                'token_expires_at' => isset($tokenPayload['expires_in'])
+                    ? now()->addSeconds((int) $tokenPayload['expires_in'])
+                    : null,
+                'token_updated_at' => now(),
+            ],
         ];
     }
 }
