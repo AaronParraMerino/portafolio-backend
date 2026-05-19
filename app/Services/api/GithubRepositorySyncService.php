@@ -7,6 +7,7 @@ use App\Models\ParticipacionRepositorio;
 use App\Models\ProyectoRepositorio;
 use App\Models\RepositorioGithub;
 use App\Models\UsuarioRepositorioValidacion;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
@@ -111,7 +112,21 @@ class GithubRepositorySyncService
             ];
         }
 
-        $publicResponse = Http::timeout(20)
+        $cacheKey = $this->repoLanguagesCacheKey($usuarioId, $repo);
+        $cachedLanguages = Cache::get($cacheKey);
+
+        if (is_array($cachedLanguages)) {
+            return [
+                'status' => 'success',
+                'owner' => $repo['owner'],
+                'repo' => $repo['name'],
+                'authenticated' => false,
+                'cached' => true,
+                'languages' => array_values($cachedLanguages),
+            ];
+        }
+
+        $publicResponse = Http::timeout(8)
             ->withHeaders([
                 'Accept' => 'application/vnd.github+json',
                 'X-GitHub-Api-Version' => '2022-11-28',
@@ -120,7 +135,7 @@ class GithubRepositorySyncService
             ->get("https://api.github.com/repos/{$repo['owner']}/{$repo['name']}/languages");
 
         if ($publicResponse->ok()) {
-            return $this->formatLanguagesResponse($repo, $publicResponse->json(), false);
+            return $this->formatLanguagesResponse($repo, $publicResponse->json(), false, $cacheKey);
         }
 
         $cuentaGithub = CuentaOauth::where('usuario_id', $usuarioId)
@@ -141,7 +156,7 @@ class GithubRepositorySyncService
             ];
         }
 
-        $response = Http::timeout(20)
+        $response = Http::timeout(8)
             ->withHeaders([
                 'Authorization' => "Bearer {$cuentaGithub->access_token}",
                 'Accept' => 'application/vnd.github+json',
@@ -178,19 +193,29 @@ class GithubRepositorySyncService
             $payload = [];
         }
 
+        $languages = array_values(array_keys($payload));
+        Cache::put($cacheKey, $languages, now()->addHours(6));
+
         return [
             'status' => 'success',
             'owner' => $repo['owner'],
             'repo' => $repo['name'],
             'authenticated' => true,
-            'languages' => array_values(array_keys($payload)),
+            'cached' => false,
+            'languages' => $languages,
         ];
     }
 
-    private function formatLanguagesResponse(array $repo, mixed $payload, bool $authenticated): array
+    private function formatLanguagesResponse(array $repo, mixed $payload, bool $authenticated, ?string $cacheKey = null): array
     {
         if (! is_array($payload)) {
             $payload = [];
+        }
+
+        $languages = array_values(array_keys($payload));
+
+        if ($cacheKey) {
+            Cache::put($cacheKey, $languages, now()->addHours(6));
         }
 
         return [
@@ -198,8 +223,14 @@ class GithubRepositorySyncService
             'owner' => $repo['owner'],
             'repo' => $repo['name'],
             'authenticated' => $authenticated,
-            'languages' => array_values(array_keys($payload)),
+            'cached' => false,
+            'languages' => $languages,
         ];
+    }
+
+    private function repoLanguagesCacheKey(int $usuarioId, array $repo): string
+    {
+        return 'github_repo_languages:' . $usuarioId . ':' . sha1(strtolower($repo['owner'] . '/' . $repo['name']));
     }
 
     public function syncProjectRepoUrlsForUsuario(int $usuarioId, int $idProyecto, array $repoUrls): array

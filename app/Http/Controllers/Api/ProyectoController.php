@@ -199,20 +199,22 @@ class ProyectoController extends Controller
 
         $idProyecto = DB::transaction(function () use ($payload, $userId) {
             $now = now();
+            $estadoPublicacion = $this->mapEstadoPublicacion($payload['estado_publicacion'] ?? $payload['estado']);
+            $estadoDesarrollo = $this->mapEstadoDesarrollo($payload['estado_desarrollo'] ?? $payload['estado']);
 
             $idProyecto = DB::table('proyectos')->insertGetId([
                 'titulo' => $payload['titulo'],
                 'descripcion' => $payload['descripcion'] ?? null,
                 'plataforma_objetivo' => $this->mapPlataforma($payload['desarrollado_para'] ?? null),
                 'categoria_proyecto' => $this->mapCategoria($payload['tipo'] ?? null),
-                'estado_publicacion' => $this->mapEstadoPublicacion($payload['estado_publicacion'] ?? $payload['estado'] ?? null),
-                'estado_desarrollo' => $this->mapEstadoDesarrollo($payload['estado_desarrollo'] ?? $payload['estado'] ?? null),
+                'estado_publicacion' => $estadoPublicacion,
+                'estado_desarrollo' => $estadoDesarrollo,
                 'fecha_inicio' => $payload['fecha_inicio'] ?? null,
                 'fecha_fin' => $payload['fecha_fin'] ?? null,
                 'origen' => 'manual',
                 'es_destacado' => 'false',
                 'orden' => 0,
-                'publicado_at' => ($payload['estado_publicacion'] ?? null) === 'publicado' ? $now : null,
+                'publicado_at' => $estadoPublicacion === 'publicado' ? $now : null,
                 'created_at' => $now,
                 'updated_at' => $now,
             ], 'id_proyecto');
@@ -262,7 +264,7 @@ class ProyectoController extends Controller
 
         $payload = $this->validatePayload($request, true);
 
-        DB::transaction(function () use ($payload, $id, $userId) {
+        DB::transaction(function () use ($payload, $id, $userId, $project) {
             $updateProject = [];
             foreach (['titulo', 'descripcion', 'fecha_inicio', 'fecha_fin'] as $field) {
                 if (array_key_exists($field, $payload)) {
@@ -280,6 +282,12 @@ class ProyectoController extends Controller
 
             if (array_key_exists('estado_publicacion', $payload) || array_key_exists('estado', $payload)) {
                 $updateProject['estado_publicacion'] = $this->mapEstadoPublicacion($payload['estado_publicacion'] ?? $payload['estado']);
+
+                if ($updateProject['estado_publicacion'] === 'publicado' && empty($project['publicado_at'])) {
+                    $updateProject['publicado_at'] = now();
+                } elseif ($updateProject['estado_publicacion'] !== 'publicado') {
+                    $updateProject['publicado_at'] = null;
+                }
             }
 
             if (array_key_exists('estado_desarrollo', $payload) || array_key_exists('estado', $payload)) {
@@ -360,20 +368,23 @@ class ProyectoController extends Controller
             return response()->json(['message' => 'Participacion no encontrada'], 404);
         }
 
-        $permissions = $this->resolveProjectPermissions($userId, $id);
-        if (! $permissions['puede_desvincular_participacion']) {
-            return response()->json(['message' => 'No tienes permiso para desvincular esta participacion'], 403);
-        }
-
-        $participantesActivos = DB::table('participaciones')
-            ->where('id_proyecto', $id)
-            ->whereNull('deleted_at')
-            ->count();
+        $participantesActivos = $this->activeProjectParticipantsCount($id);
 
         if ($participantesActivos <= 1) {
             return response()->json([
                 'message' => 'No puedes desvincularte porque eres el unico participante del proyecto. Puedes eliminar el proyecto.',
             ], 422);
+        }
+
+        if ($this->isSoleActiveProjectOwner($participacion, $id)) {
+            return response()->json([
+                'message' => 'No puedes desvincularte porque eres el propietario principal del proyecto. Elimina el proyecto o asigna otro propietario antes de salir.',
+            ], 422);
+        }
+
+        $permissions = $this->resolveProjectPermissions($userId, $id);
+        if (! $permissions['puede_desvincular_participacion']) {
+            return response()->json(['message' => 'No tienes permiso para desvincular esta participacion'], 403);
         }
 
         DB::transaction(function () use ($participacion) {
@@ -415,6 +426,10 @@ class ProyectoController extends Controller
             return response()->json(['message' => 'Usa la opcion de desvincular tu propia participacion.'], 422);
         }
 
+        if ($this->truthy($participacion->es_propietario ?? false)) {
+            return response()->json(['message' => 'No puedes quitar al propietario del proyecto desde esta opcion.'], 422);
+        }
+
         $isValidated = (bool) ($participacion->participacion_validada ?? false)
             || $this->hasValidatedGithubParticipation((int) $participacion->id_usuario, $id);
 
@@ -422,10 +437,7 @@ class ProyectoController extends Controller
             return response()->json(['message' => 'Solo se pueden quitar participantes sin validacion GitHub desde esta opcion.'], 422);
         }
 
-        $participantesActivos = DB::table('participaciones')
-            ->where('id_proyecto', $id)
-            ->whereNull('deleted_at')
-            ->count();
+        $participantesActivos = $this->activeProjectParticipantsCount($id);
 
         if ($participantesActivos <= 1) {
             return response()->json(['message' => 'No puedes quitar al unico participante del proyecto.'], 422);
@@ -721,9 +733,15 @@ class ProyectoController extends Controller
         $rules = [
             'titulo' => [$partial ? 'sometimes' : 'required', 'string', 'max:200'],
             'descripcion' => 'nullable|string|max:600',
-            'estado' => 'nullable|string|max:30',
-            'estado_publicacion' => 'nullable|string|max:30',
-            'estado_desarrollo' => 'nullable|string|max:30',
+            'estado' => [
+                $partial ? 'sometimes' : 'required',
+                'string',
+                'max:30',
+                'not_in:sin_especificar',
+                'in:borrador,publicado,archivado,en_desarrollo,desarrollo,pausado,terminado,mantenimiento,versionado,cancelado',
+            ],
+            'estado_publicacion' => 'nullable|string|max:30|in:borrador,publicado,archivado',
+            'estado_desarrollo' => 'nullable|string|max:30|in:sin_especificar,en_desarrollo,desarrollo,pausado,terminado,mantenimiento,versionado,cancelado',
             'tipo' => 'nullable|string|max:80',
             'desarrollado_para' => 'nullable|string|max:80',
             'fecha_inicio' => 'nullable|date',
@@ -935,7 +953,7 @@ class ProyectoController extends Controller
             'enlace_union_activo',
             'permitir_remover_participantes_sin_validacion',
         ] as $key) {
-            $config[$key] = (bool) ($config[$key] ?? false);
+            $config[$key] = $this->truthy($config[$key] ?? false);
         }
 
         $config['id_proyecto'] = (int) ($config['id_proyecto'] ?? $idProyecto);
@@ -975,36 +993,35 @@ class ProyectoController extends Controller
         $config = $this->getProjectConfiguration($idProyecto);
         $authority = $this->getGithubAuthorityForProject($userId, $idProyecto, $config);
 
-        $isOwner = (bool) ($participacion->es_propietario ?? false);
+        $isOwner = $this->truthy($participacion->es_propietario ?? false);
         $isGithubAuthority = (bool) ($authority['tiene_autoridad'] ?? false);
         $isValidated = (bool) ($participacion->participacion_validada ?? false)
             || $this->hasValidatedGithubParticipation($userId, $idProyecto);
+        $githubOverridesCreator = (bool) ($config['github_prevalece_sobre_creador'] ?? true);
+        $adminPolicy = $config['puede_administrar_proyecto'] ?? 'propietarios';
+        $githubCanManage = $isGithubAuthority
+            && ($githubOverridesCreator || $adminPolicy === 'autoridad_github');
+        $canAdmin = $isOwner || $githubCanManage;
 
         $canEdit = match ($config['puede_editar_proyecto'] ?? 'participantes_validados') {
-            'propietarios' => $isOwner || $isGithubAuthority,
+            'propietarios' => $isOwner || ($githubOverridesCreator && $isGithubAuthority),
             'autoridad_github' => $isOwner || $isGithubAuthority,
             'participantes' => true,
-            default => $isOwner || $isGithubAuthority || $isValidated,
+            default => $isOwner || ($githubOverridesCreator && $isGithubAuthority) || $isValidated,
         };
 
-        $canAdmin = match ($config['puede_administrar_proyecto'] ?? 'propietarios') {
-            'autoridad_github' => $isOwner || $isGithubAuthority,
-            default => $isOwner || $isGithubAuthority,
-        };
         $canRemoveUnvalidated = (bool) ($config['permitir_remover_participantes_sin_validacion'] ?? false)
-            && $isGithubAuthority;
+            && $canAdmin;
 
-        $activeParticipants = DB::table('participaciones')
-            ->where('id_proyecto', $idProyecto)
-            ->whereNull('deleted_at')
-            ->count();
+        $activeParticipants = $this->activeProjectParticipantsCount($idProyecto);
+        $isSoleOwner = $this->isSoleActiveProjectOwner($participacion, $idProyecto);
 
         return [
             'puede_editar' => $canEdit,
             'puede_eliminar' => $isOwner,
-            'puede_configurar' => $isOwner || $isGithubAuthority,
+            'puede_configurar' => $canAdmin,
             'puede_administrar' => $canAdmin,
-            'puede_desvincular_participacion' => $activeParticipants > 1,
+            'puede_desvincular_participacion' => $activeParticipants > 1 && ! $isSoleOwner,
             'puede_remover_participantes_sin_validacion' => $canRemoveUnvalidated,
             'es_propietario' => $isOwner,
             'es_autoridad_github' => $isGithubAuthority,
@@ -1012,6 +1029,32 @@ class ProyectoController extends Controller
             'nivel_github' => $authority['nivel'] ?? null,
             'relacion_github' => $authority['relacion'] ?? null,
         ];
+    }
+
+    private function activeProjectParticipantsCount(int $idProyecto): int
+    {
+        return DB::table('participaciones')
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->count();
+    }
+
+    private function activeProjectOwnersCount(int $idProyecto): int
+    {
+        return DB::table('participaciones')
+            ->where('id_proyecto', $idProyecto)
+            ->whereRaw('es_propietario = TRUE')
+            ->whereNull('deleted_at')
+            ->count();
+    }
+
+    private function isSoleActiveProjectOwner(object $participacion, int $idProyecto): bool
+    {
+        if (! $this->truthy($participacion->es_propietario ?? false)) {
+            return false;
+        }
+
+        return $this->activeProjectOwnersCount($idProyecto) <= 1;
     }
 
     private function hasValidatedGithubParticipation(int $userId, int $idProyecto): bool
@@ -1097,9 +1140,14 @@ class ProyectoController extends Controller
         return [];
     }
 
+    private function truthy(mixed $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN);
+    }
+
     private function postgresBool(mixed $value): string
     {
-        return filter_var($value, FILTER_VALIDATE_BOOLEAN) ? 'TRUE' : 'FALSE';
+        return $this->truthy($value) ? 'TRUE' : 'FALSE';
     }
 
     private function collectProjectParticipants(int $idProyecto, int $requestUserId): array
@@ -1368,7 +1416,7 @@ class ProyectoController extends Controller
         $ids = [];
 
         foreach ($nombres as $index => $nombre) {
-            $resultado = $this->tecnologiaService->agregarPorNombre($nombre);
+            $resultado = $this->tecnologiaService->agregarBasicaPorNombre($nombre);
             $tecnologia = $resultado['tecnologia'] ?? null;
 
             if (! $tecnologia?->id_tecnologia) {
@@ -1539,8 +1587,11 @@ class ProyectoController extends Controller
             return 'publicado';
         }
 
+        if ($estadoPublicacion === 'borrador' && (! $estadoDesarrollo || $estadoDesarrollo === 'sin_especificar')) {
+            return 'borrador';
+        }
+
         return in_array($estadoDesarrollo, [
-            'sin_especificar',
             'en_desarrollo',
             'pausado',
             'terminado',

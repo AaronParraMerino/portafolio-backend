@@ -65,6 +65,41 @@ class TecnologiaController extends Controller
         ], $resultado['creado'] ? 201 : 200);
     }
 
+    public function storeDetectedBatch(Request $request)
+    {
+        $datos = $request->validate([
+            'tecnologias' => ['required', 'array', 'min:1', 'max:20'],
+            'tecnologias.*' => ['required', 'string', 'max:100'],
+            'tipo' => [
+                'nullable',
+                Rule::in($this->tiposPermitidos()),
+            ],
+        ]);
+
+        $tipo = $datos['tipo'] ?? 'lenguaje';
+        $nombres = collect($datos['tecnologias'])
+            ->map(fn ($nombre) => trim((string) $nombre))
+            ->filter()
+            ->unique(fn ($nombre) => mb_strtolower($nombre))
+            ->values();
+
+        $tecnologias = [];
+
+        foreach ($nombres as $nombre) {
+            $resultado = $this->tecnologiaService->agregarBasicaPorNombre($nombre, $tipo);
+
+            if (! empty($resultado['tecnologia'])) {
+                $tecnologias[] = $resultado['tecnologia'];
+            }
+        }
+
+        return response()->json([
+            'ok' => true,
+            'mensaje' => 'Tecnologias detectadas aseguradas correctamente.',
+            'data' => $tecnologias,
+        ]);
+    }
+
     public function update(Request $request, string $nombre)
     {
         $datos = $request->validate([
