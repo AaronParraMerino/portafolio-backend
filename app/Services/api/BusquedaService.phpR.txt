@@ -1,0 +1,965 @@
+<?php
+
+namespace App\Services\Api;
+
+use Illuminate\Support\Facades\DB;
+use App\Models\Habilidad;
+use Illuminate\Support\Str;
+
+class BusquedaService
+{
+
+public function search(array $f, int $perPage = 12)
+{
+    $tieneQuery       = !empty(trim(data_get($f, 'query', '')));
+    $tieneUsuario     = $this->tieneValores(data_get($f, 'usuario'));
+    $tieneHabilidades = $this->tieneValores(data_get($f, 'habilidades'));
+    $tieneExperiencia = $this->tieneValores(data_get($f, 'experiencia'));
+    $tieneProyectos   = $this->tieneValores(data_get($f, 'proyectos'));
+
+    $q = DB::table('usuarios')
+        ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
+        ->leftJoin('visibilidad_campos as vis_profesion', function ($join) {
+            $join->on('vis_profesion.usuario_id', '=', 'usuarios.id_usuario')
+                ->whereRaw("vis_profesion.campo = 'profesion'");
+        })
+        ->leftJoin('visibilidad_campos as vis_ciudad', function ($join) {
+            $join->on('vis_ciudad.usuario_id', '=', 'usuarios.id_usuario')
+                ->whereRaw("vis_ciudad.campo = 'ciudad'");
+        })
+        ->leftJoin('visibilidad_campos as vis_pais', function ($join) {
+            $join->on('vis_pais.usuario_id', '=', 'usuarios.id_usuario')
+                ->whereRaw("vis_pais.campo = 'pais'");
+        })
+        ->where('usuarios.estado', 'activo')
+        ->whereRaw('perfiles.es_publico IS TRUE');
+
+    // query y usuario filtran directo en el query base
+    if ($tieneQuery) {
+        $this->applyQueryFilter($q, $f);
+    }
+
+    if ($tieneUsuario) {
+        $this->applyUsuarioFilter($q, $f);
+    }
+
+    //SUBQUERIES CON FILTRO (habilidades, experiencia, proyectos)
+    if ($tieneHabilidades) {
+        $subH = $this->subHabilidades($f);
+        $q->leftJoinSub($subH, 'h', fn($j) => $j->on('h.usuario_id', '=', 'usuarios.id_usuario'));
+        $q->whereRaw('COALESCE(h.total, 0) > 0');
+    }
+
+    if ($tieneExperiencia) {
+        $subE = $this->subExperiencias($f);
+        $q->leftJoinSub($subE, 'e', fn($j) => $j->on('e.usuario_id', '=', 'usuarios.id_usuario'));
+        $q->whereRaw('COALESCE(e.total, 0) > 0');
+    }
+
+    if ($tieneProyectos) {
+        $subP = $this->subProyectos($f);
+        $q->leftJoinSub($subP, 'p', fn($j) => $j->on('p.usuario_id', '=', 'usuarios.id_usuario'));
+        $q->whereRaw('COALESCE(p.total, 0) > 0');
+    }
+
+    //IDs FINALISTAS 
+    $idsFinalistas = (clone $q)->pluck('usuarios.id_usuario')->toArray();
+
+    //SUBQUERIES SIN FILTRO (solo finalistas)
+    if (!$tieneHabilidades) {
+        $q->leftJoinSub($this->subHabilidadesSinFiltro($idsFinalistas, $f), 'h',
+            fn($j) => $j->on('h.usuario_id', '=', 'usuarios.id_usuario'));
+    }
+
+    if (!$tieneExperiencia) {
+        $q->leftJoinSub($this->subExperienciasSinFiltro($idsFinalistas, $f), 'e',
+            fn($j) => $j->on('e.usuario_id', '=', 'usuarios.id_usuario'));
+    }
+
+    if (!$tieneProyectos) {
+        $q->leftJoinSub($this->subProyectosSinFiltro($idsFinalistas, $f), 'p',
+            fn($j) => $j->on('p.usuario_id', '=', 'usuarios.id_usuario'));
+    }
+
+    // ── SELECT + ORDER ────────────────────────────────────
+    $q->select([
+        'usuarios.id_usuario',
+        'usuarios.nombre',
+        'usuarios.apellido',
+        'perfiles.foto_perfil',
+        DB::raw('CASE WHEN COALESCE(vis_profesion.visible, false) = true THEN perfiles.profesion ELSE NULL END AS profesion'),
+        DB::raw('CASE WHEN COALESCE(vis_ciudad.visible, false) = true THEN perfiles.ciudad ELSE NULL END AS ciudad'),
+        DB::raw('CASE WHEN COALESCE(vis_pais.visible, false) = true THEN perfiles.pais ELSE NULL END AS pais'),
+        DB::raw('COALESCE(h.total, 0)         AS habilidades_relacionadas'),
+        DB::raw("COALESCE(h.tecnologias, '')   AS tecnologias_relacionadas"),
+        DB::raw('COALESCE(e.total, 0)          AS experiencias_relacionadas'),
+        DB::raw('COALESCE(p.total, 0)          AS proyectos_relacionados'),
+    ]);
+
+    if ($tieneQuery) {
+        $this->addQueryRelevanceSelect($q, $f);
+    } else {
+        $q->selectRaw('0 AS relevancia_textual');
+    }
+
+    $this->applyOrdering($q, $f);
+
+    return $q->paginate($perPage);
+}
+
+    private function tieneValores($valor): bool
+    {
+        if ($valor === null || $valor === '' || $valor === false) {
+            return false;
+        }
+        if (is_array($valor)) {
+            foreach ($valor as $v) {
+                if ($this->tieneValores($v)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+/* Funcion de filtro general: busca texto en nombre completo, profesión, habilidades y tecnologías de proyectos
+*/
+    /*private function applyQueryFilter($q, array $f): void
+    {
+        $query = trim((string) data_get($f, 'query', ''));
+
+        if ($query === '') {
+            return;
+        }
+
+        $texto = '%' . $query . '%';
+        $fechaDesde = data_get($f, 'orden.fecha_desde');
+
+        $q->where(function ($w) use ($texto, $fechaDesde) {
+            $w->whereRaw("LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)", [$texto])
+                ->orWhere(function ($q) use ($texto) {
+                    $q->whereRaw('COALESCE(vis_profesion.visible, false) = true')
+                        ->where('perfiles.profesion', 'ilike', $texto);
+                })
+                ->orWhereExists(fn($s) => $s
+                    ->from('habilidades_usuario as hu')
+                    ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
+                    ->whereColumn('hu.usuario_id', 'usuarios.id_usuario')
+                    ->whereRaw('hu.es_visible IS TRUE')
+                    ->where('hb.nombre', 'ilike', $texto)
+                    ->when($fechaDesde, fn($q) => $q->whereDate('hu.created_at', '>=', $fechaDesde))
+                )
+                ->orWhereExists(fn($s) => $s
+                    ->from('participaciones as par')
+                    ->join('proyectos as p2', 'p2.id_proyecto', '=', 'par.id_proyecto')
+                    ->join('uso_tecnologias as ut', 'ut.id_proyecto', '=', 'p2.id_proyecto')
+                    ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+                    ->whereColumn('par.id_usuario', 'usuarios.id_usuario')
+                    ->where('par.visibilidad', 'publico')
+                    ->whereNull('p2.deleted_at')
+                    ->whereNull('ut.deleted_at')
+                    ->whereRaw('ut.es_visible IS TRUE')
+                    ->where('t.nombre', 'ilike', $texto)
+                    ->when($fechaDesde, fn($q) => $q->whereDate('par.fecha_inicio', '>=', $fechaDesde))
+                );
+        });
+    }*/
+
+    private function applyQueryFilter($q, array $f): void
+    {
+        $query = trim((string) data_get($f, 'query', ''));
+
+        if ($query === '') {
+            return;
+        }
+
+        $tokens = $this->queryTokens($query);
+        $fechaDesde = $this->fechaDesde($f);
+
+        if (empty($tokens)) {
+            return;
+        }
+
+        $q->where(function ($w) use ($tokens, $fechaDesde) {
+            foreach ($tokens as $token) {
+                $like = "%{$token}%";
+
+                $w->orWhereRaw(
+                    "LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE ?",
+                    [$like]
+                )
+
+                ->orWhere(function ($q) use ($like) {
+                    $q->whereRaw('COALESCE(vis_profesion.visible, false) = true')
+                        ->where('perfiles.profesion', 'ilike', $like);
+                })
+
+                ->orWhere(function ($q) use ($like) {
+                    $q->whereRaw('COALESCE(vis_ciudad.visible, false) = true')
+                        ->where('perfiles.ciudad', 'ilike', $like);
+                })
+
+                ->orWhere(function ($q) use ($like) {
+                    $q->whereRaw('COALESCE(vis_pais.visible, false) = true')
+                        ->where('perfiles.pais', 'ilike', $like);
+                })
+
+                ->orWhereExists(function ($s) use ($like, $fechaDesde) {
+                    $s->from('habilidades_usuario as hu')
+                        ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
+                        ->whereColumn('hu.usuario_id', 'usuarios.id_usuario')
+                        ->whereRaw('hu.es_visible IS TRUE')
+                        ->whereRaw('hb.estado IS TRUE')
+                        ->where(function ($q) use ($like) {
+                            $q->where('hb.nombre', 'ilike', $like)
+                            ->orWhere('hb.nombre_normalizado', 'ilike', $like);
+                        })
+                        ->when($fechaDesde, fn($q) => $q->whereDate('hu.created_at', '>=', $fechaDesde));
+                })
+
+                ->orWhereExists(function ($s) use ($like, $fechaDesde) {
+                    $s->from('experiencias as ex')
+                        ->whereColumn('ex.usuario_id', 'usuarios.id_usuario')
+                        ->whereRaw('ex.es_publico IS TRUE')
+                        ->where('ex.cargo', 'ilike', $like)
+                        ->when($fechaDesde, fn($q) => $q->whereDate('ex.fecha_inicio', '>=', $fechaDesde));
+                })
+
+                ->orWhereExists(function ($s) use ($like, $fechaDesde) {
+                    $s->from('participaciones as par')
+                        ->join('proyectos as p2', 'p2.id_proyecto', '=', 'par.id_proyecto')
+                        ->join('uso_tecnologias as ut', 'ut.id_proyecto', '=', 'p2.id_proyecto')
+                        ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+                        ->whereColumn('par.id_usuario', 'usuarios.id_usuario')
+                        ->where('par.visibilidad', 'publico')
+                        ->whereNull('par.deleted_at')
+                        ->whereNull('p2.deleted_at')
+                        ->whereNull('ut.deleted_at')
+                        ->whereRaw('ut.es_visible IS TRUE')
+                        ->where('t.nombre', 'ilike', $like)
+                        ->when($fechaDesde, fn($q) => $q->whereDate('par.fecha_inicio', '>=', $fechaDesde));
+                });
+            }
+        });
+    }
+
+    /**
+     * Subquery de usuario: filtra nombre, ciudad, país y profesión.
+     */
+        private function applyUsuarioFilter($q, array $f): void
+    {
+        $u = data_get($f, 'usuario', []);
+
+        if (!empty($u['nombre'])) {
+            $q->whereRaw(
+                "LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)",
+                ["%{$u['nombre']}%"]
+            );
+        }
+
+        if (!empty($u['ciudad'])) {
+            $q->whereRaw('COALESCE(vis_ciudad.visible, false) = true')
+                ->whereIn(DB::raw('LOWER(perfiles.ciudad)'), $this->normalize($u['ciudad']));
+        }
+
+        if (!empty($u['pais'])) {
+            $q->whereRaw('COALESCE(vis_pais.visible, false) = true')
+                ->whereIn(DB::raw('LOWER(perfiles.pais)'), $this->normalize($u['pais']));
+        }
+
+        if (!empty($u['profesion'])) {
+            $q->whereRaw('COALESCE(vis_profesion.visible, false) = true')
+                ->where(function ($w) use ($u) {
+                    foreach ($u['profesion'] as $p) {
+                        $w->orWhere('perfiles.profesion', 'ilike', "%{$p}%");
+                    }
+                });
+        }
+    }
+
+    /**
+     * Subquery de habilidades CON filtro:
+     * Filtra por nombre (técnicas/blandas) y nivel.
+     * Devuelve: usuario_id | total | tecnologias (string separado por comas)
+     */
+    private function subHabilidades(array $f)
+    {
+        $tecItems   = data_get($f, 'habilidades.tecnicas.items', []);
+        $tecNiveles = data_get($f, 'habilidades.tecnicas.niveles', []);
+
+        $blaItems   = data_get($f, 'habilidades.blandas.items', []);
+        $blaNiveles = data_get($f, 'habilidades.blandas.niveles', []);
+
+        $sub = DB::table('habilidades_usuario as hu')
+            ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
+            ->select(
+                'hu.usuario_id',
+                DB::raw('COUNT(*) as total'),
+                DB::raw("STRING_AGG(hb.nombre, ', ') as tecnologias")
+            )
+            ->whereRaw('hu.es_visible IS TRUE')
+            ->whereRaw('hb.estado IS TRUE');
+
+        $fechaDesde = $this->fechaDesde($f);
+        if ($fechaDesde) {
+            $sub->whereDate('hu.created_at', '>=', $fechaDesde);
+        }
+
+        $hayTecnicas = !empty($tecItems) || !empty($tecNiveles);
+        $hayBlandas  = !empty($blaItems) || !empty($blaNiveles);
+
+        if ($hayTecnicas || $hayBlandas) {
+            $sub->where(function ($w) use ($tecItems, $tecNiveles, $blaItems, $blaNiveles, $hayTecnicas, $hayBlandas) {
+                
+                if ($hayTecnicas) {
+                    $w->orWhere(function ($q) use ($tecItems, $tecNiveles) {
+                        $q->where('hb.tipo', 'tecnica');
+
+                        if (!empty($tecItems)) {
+                            $q->whereIn('hb.nombre_normalizado', $this->normalize($tecItems));
+                        }
+
+                        $niveles = $this->normalize($tecNiveles);
+
+                        if (!empty($niveles) && !in_array('todos', $niveles)) {
+                            $q->whereIn(DB::raw('LOWER(hu.nivel)'), $niveles);
+                        }
+                    });
+                }
+
+                if ($hayBlandas) {
+                    $w->orWhere(function ($q) use ($blaItems, $blaNiveles) {
+                        $q->where('hb.tipo', 'blanda');
+
+                        if (!empty($blaItems)) {
+                            $q->whereIn('hb.nombre_normalizado', $this->normalize($blaItems));
+                        }
+
+                        $niveles = $this->normalize($blaNiveles);
+
+                        if (!empty($niveles) && !in_array('todos', $niveles)) {
+                            $q->whereIn(DB::raw('LOWER(hu.nivel)'), $niveles);
+                        }
+                    });
+                }
+            });
+        }
+
+        return $sub->groupBy('hu.usuario_id');
+    }
+
+    /**
+     * Subquery de experiencias CON filtro:
+     * Filtra por tipo (laboral/académica) y cargo.
+     * Devuelve: usuario_id | total
+     */
+    
+    private function subExperiencias(array $f)
+   {
+        $experiencias = data_get($f, 'experiencia', []);
+
+        $sub = DB::table('experiencias as ex')
+            ->select('ex.usuario_id', DB::raw('COUNT(*) as total'))
+            ->whereRaw('ex.es_publico IS TRUE');
+
+        $fechaDesde = $this->fechaDesde($f);
+
+        if ($fechaDesde) {
+            $sub->whereDate('ex.fecha_inicio', '>=', $fechaDesde);
+        }
+        if (!empty($experiencias)) {
+            $sub->where(function ($w) use ($experiencias) {
+                foreach ($experiencias as $item) {
+                    $cargo = data_get($item, 'cargo');
+                    $tipos = data_get($item, 'tipos', []);
+
+                    if (empty($cargo) && empty($tipos)) {
+                        continue;
+                    }
+
+                    $w->orWhere(function ($q) use ($cargo, $tipos) {
+                        if (!empty($cargo)) {
+                            $q->where('ex.cargo', 'ilike', "%{$cargo}%");
+                        }
+
+                        $tiposLower = $this->normalize($tipos);
+
+                        if (!empty($tiposLower) && !in_array('ambos', $tiposLower)) {
+                            $q->whereIn(DB::raw('LOWER(ex.tipo)'), $tiposLower);
+                        }
+                    });
+                }
+            });
+        }
+
+        return $sub->groupBy('ex.usuario_id');
+    }
+
+    /**
+     * Subquery de proyectos CON filtro:
+     * Filtra por tecnologías, tipo de proyecto y estado.
+     * Devuelve: usuario_id | total
+     */
+    private function subProyectos(array $f)
+    {
+        $pr          = data_get($f, 'proyectos', []);
+        $tecnologias = data_get($pr, 'tecnologias', []);
+        $tipo        = data_get($pr, 'tipo', []);
+        $estado      = data_get($pr, 'estado', []);
+
+        $sub = DB::table('participaciones as par')
+            ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
+            ->select('par.id_usuario as usuario_id', DB::raw('COUNT(*) as total'))
+            ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
+            ->whereNull('p.deleted_at');
+
+        $fechaDesde = $this->fechaDesde($f);
+
+        if ($fechaDesde) {
+            $sub->whereDate('par.fecha_inicio', '>=', $fechaDesde);
+        }
+
+        if (!empty($tecnologias)) {
+            $sub->whereExists(function ($q) use ($tecnologias) {
+                $q->from('uso_tecnologias as ut')
+                    ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+                    ->whereColumn('ut.id_proyecto', 'p.id_proyecto')
+                    ->whereNull('ut.deleted_at')
+                    ->whereRaw('ut.es_visible IS TRUE')
+                    ->whereIn(DB::raw('LOWER(t.nombre)'), $this->normalize($tecnologias));
+            });
+        }
+        if (!empty($tipo)) {
+        $sub->whereIn(
+            DB::raw('LOWER(p.categoria_proyecto)'),
+            $this->normalizeEnum($tipo)
+        );
+    }
+
+        if (!empty($estado)) {
+    $estadoLower = $this->normalizeEnum($estado);
+
+        if (!in_array('todos', $estadoLower)) {
+            $sub->where(function ($q) use ($estadoLower) {
+                if (in_array('publicado', $estadoLower)) {
+                    $q->orWhere('p.estado_publicacion', 'publicado');
+                }
+
+                if (in_array('borrador', $estadoLower)) {
+                    $q->orWhere('p.estado_publicacion', 'borrador');
+                }
+
+                if (in_array('archivado', $estadoLower)) {
+                    $q->orWhere('p.estado_publicacion', 'archivado');
+                }
+
+                if (in_array('en_desarrollo', $estadoLower)) {
+                    $q->orWhere('p.estado_desarrollo', 'en_desarrollo');
+                }
+            });
+        }
+    }
+
+        return $sub->groupBy('par.id_usuario');
+    }
+
+    // Mismas columnas que las con filtro, pero sin WHERE
+    // Se aplican solo a los finalistas del join
+
+    /**
+     * Habilidades técnicas SIN filtro:
+     * Cuenta todas las habilidades técnicas visibles.
+     * Devuelve: usuario_id | total | tecnologias (string)
+     * (mismas columnas que subHabilidades)
+     */
+
+    private function subHabilidadesSinFiltro(array $ids, array $f)
+    {
+        $fechaDesde = $this->fechaDesde($f);
+        //Habilidades técnicas del usuario
+        $habilidades = DB::table('habilidades_usuario as hu')
+            ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
+            ->select(
+                'hu.usuario_id',
+                DB::raw('hb.nombre as nombre'),
+                DB::raw('LOWER(hb.nombre_normalizado) as clave')
+            )
+            ->whereRaw('hu.es_visible IS TRUE')
+            ->whereRaw('hb.estado IS TRUE')
+            ->where('hb.tipo', 'tecnica')
+            ->whereIn('hu.usuario_id', $ids);
+
+        if ($fechaDesde) {
+            $habilidades->whereDate('hu.created_at', '>=', $fechaDesde);
+        }
+
+        // Tecnologías usadas en proyectos públicos del usuario
+        $tecnologiasProyecto = DB::table('participaciones as par')
+            ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
+            ->join('uso_tecnologias as ut', 'ut.id_proyecto', '=', 'p.id_proyecto')
+            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+            ->select(
+                'par.id_usuario as usuario_id',
+                DB::raw('t.nombre as nombre'),
+                DB::raw('LOWER(t.nombre) as clave')
+            )
+            ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
+            ->whereNull('p.deleted_at')
+            ->whereNull('ut.deleted_at')
+            ->whereRaw('ut.es_visible IS TRUE')
+            ->whereIn('par.id_usuario', $ids);
+
+        if ($fechaDesde) {
+            $tecnologiasProyecto->whereDate('par.fecha_inicio', '>=', $fechaDesde);
+        }
+
+        // Unir habilidades + tecnologías y agrupar por usuario
+        $union = $habilidades->unionAll($tecnologiasProyecto);
+
+        return DB::query()
+            ->fromSub($union, 'x')
+            ->select(
+                'x.usuario_id',
+                DB::raw('COUNT(DISTINCT x.clave) as total'),
+                DB::raw("STRING_AGG(DISTINCT x.nombre, ', ') as tecnologias")
+            )
+            ->groupBy('x.usuario_id');
+    }
+
+    /**
+     * Experiencias SIN filtro:
+     * Cuenta todas las experiencias públicas.
+     * Devuelve: usuario_id | total
+     * (misma columna que subExperiencias)
+     */
+        private function subExperienciasSinFiltro(array $ids, array $f)
+    {
+        $fechaDesde = $this->fechaDesde($f);
+
+        $q = DB::table('experiencias as ex')
+            ->select('ex.usuario_id', DB::raw('COUNT(*) as total'))
+            ->whereRaw('ex.es_publico IS TRUE')
+            ->whereIn('ex.usuario_id', $ids);
+
+        if ($fechaDesde) {
+            $q->whereDate('ex.fecha_inicio', '>=', $fechaDesde);
+        }
+
+        return $q->groupBy('ex.usuario_id');
+    }
+
+    /**
+     * Proyectos SIN filtro:
+     * Cuenta todos los proyectos públicos del usuario.
+     * Devuelve: usuario_id | total
+     * (misma columna que subProyectos)
+     */
+        private function subProyectosSinFiltro(array $ids, array $f)
+    {
+        $fechaDesde = $this->fechaDesde($f);
+
+        $q = DB::table('participaciones as par')
+            ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
+            ->select('par.id_usuario as usuario_id', DB::raw('COUNT(*) as total'))
+            ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
+            ->whereNull('p.deleted_at')
+            ->whereIn('par.id_usuario', $ids);
+
+        if ($fechaDesde) {
+            $q->whereDate('par.fecha_inicio', '>=', $fechaDesde);
+        }
+
+        return $q->groupBy('par.id_usuario');
+    }
+
+    // Ordenarmiento final
+
+    /*private function applyOrdering($q, array $f): void
+    {
+        $o = data_get($f, 'orden', []);
+
+        $dir = strtolower(data_get($o, 'direccion', 'desc')) === 'asc'
+            ? 'asc'
+            : 'desc';
+
+        $this->applyPriorityOrdering($q, $o, $dir, $f);
+        $this->applyRelevanceOrdering($q, $dir);
+
+        $q->orderBy('usuarios.id_usuario', 'asc');
+    }*/
+    private function applyOrdering($q, array $f): void
+{
+    $o = data_get($f, 'orden', []);
+
+    $dir = strtolower(data_get($o, 'direccion', 'desc')) === 'asc'
+        ? 'asc'
+        : 'desc';
+
+    $tieneQuery = !empty(trim(data_get($f, 'query', '')));
+
+    if ($tieneQuery) {
+        $q->orderByRaw('relevancia_textual DESC');
+
+        $q->orderByRaw("
+            (
+                COALESCE(h.total, 0) * 3 +
+                COALESCE(e.total, 0) * 2 +
+                COALESCE(p.total, 0) * 1
+            ) DESC
+        ");
+
+        $q->orderBy('usuarios.id_usuario', 'asc');
+
+        return;
+    }
+
+    $this->applyPriorityOrdering($q, $o, $dir, $f);
+    $this->applyRelevanceOrdering($q, $dir);
+
+    $q->orderBy('usuarios.id_usuario', 'asc');
+}
+
+    private function applyPriorityOrdering($q, array $o, string $dir, array $f): void
+    {
+        // Si el usuario activó una priorización explícita, esa manda
+        if (!empty($o['priorizar_proyectos'])) {
+            $q->orderByRaw("COALESCE(p.total, 0) {$dir}");
+            return;
+        }
+
+        if (!empty($o['priorizar_experiencia'])) {
+            $q->orderByRaw("COALESCE(e.total, 0) {$dir}");
+            return;
+        }
+
+        if (!empty($o['priorizar_habilidades'])) {
+            $q->orderByRaw("COALESCE(h.total, 0) {$dir}");
+            return;
+        }
+
+        // Si todas las priorizaciones son false,
+        // se prioriza automáticamente según los filtros enviados
+        $tieneUsuario     = $this->tieneValores(data_get($f, 'usuario'));
+        $tieneHabilidades = $this->tieneValores(data_get($f, 'habilidades'));
+        $tieneProyectos   = $this->tieneValores(data_get($f, 'proyectos'));
+        $tieneExperiencia = $this->tieneValores(data_get($f, 'experiencia'));
+
+        // Usuario y habilidades priorizan habilidades por defecto
+        if ($tieneUsuario || $tieneHabilidades) {
+            $q->orderByRaw("COALESCE(h.total, 0) {$dir}");
+            return;
+        }
+
+        if ($tieneProyectos) {
+            $q->orderByRaw("COALESCE(p.total, 0) {$dir}");
+            return;
+        }
+
+        if ($tieneExperiencia) {
+            $q->orderByRaw("COALESCE(e.total, 0) {$dir}");
+            return;
+        }
+    }
+
+    private function applyRelevanceOrdering($q, string $dir): void
+    {
+        $q->orderByRaw("
+            (
+                COALESCE(h.total, 0) * 3 +
+                COALESCE(e.total, 0) * 2 +
+                COALESCE(p.total, 0) * 1
+            ) {$dir}
+        ");
+    }
+
+    private function queryTokens(string $query): array
+    {
+        $query = Str::lower(Str::ascii(trim($query)));
+
+        $tokens = preg_split('/\s+/', $query);
+
+        return array_values(array_unique(array_filter($tokens, function ($token) {
+            return trim($token) !== '';
+        })));
+    }
+
+    private function addQueryRelevanceSelect($q, array $f): void
+    {
+        $query = trim((string) data_get($f, 'query', ''));
+        $tokens = $this->queryTokens($query);
+        $fechaDesde = $this->fechaDesde($f);
+
+        if (empty($tokens)) {
+            $q->selectRaw('0 AS relevancia_textual');
+            return;
+        }
+
+        $parts = [];
+        $bindings = [];
+
+        $full = Str::lower(Str::ascii($query));
+        $fullLike = "%{$full}%";
+
+        $parts[] = "CASE WHEN LOWER(usuarios.nombre || ' ' || usuarios.apellido) = ? THEN 100 ELSE 0 END";
+        $bindings[] = $full;
+
+        $parts[] = "CASE WHEN LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE ? THEN 60 ELSE 0 END";
+        $bindings[] = $fullLike;
+
+        foreach ($tokens as $token) {
+            $like = "%{$token}%";
+
+            $parts[] = "CASE WHEN LOWER(usuarios.nombre) = ? OR LOWER(usuarios.apellido) = ? THEN 35 ELSE 0 END";
+            $bindings[] = $token;
+            $bindings[] = $token;
+
+            $parts[] = "CASE WHEN LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE ? THEN 20 ELSE 0 END";
+            $bindings[] = $like;
+
+            $parts[] = "CASE WHEN COALESCE(vis_profesion.visible, false) = true AND perfiles.profesion ILIKE ? THEN 15 ELSE 0 END";
+            $bindings[] = $like;
+
+            $parts[] = "CASE WHEN COALESCE(vis_ciudad.visible, false) = true AND perfiles.ciudad ILIKE ? THEN 8 ELSE 0 END";
+            $bindings[] = $like;
+
+            $parts[] = "CASE WHEN COALESCE(vis_pais.visible, false) = true AND perfiles.pais ILIKE ? THEN 8 ELSE 0 END";
+            $bindings[] = $like;
+
+            $parts[] = "
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM habilidades_usuario hu
+                    JOIN habilidades hb ON hb.id_habilidad = hu.habilidad_id
+                    WHERE hu.usuario_id = usuarios.id_usuario
+                    AND hu.es_visible IS TRUE
+                    AND hb.estado IS TRUE
+                    AND (
+                        LOWER(hb.nombre_normalizado) = ?
+                        OR LOWER(hb.nombre) = ?
+                    )
+                    " . ($fechaDesde ? " AND DATE(hu.created_at) >= ? " : "") . "
+                ) THEN 40 ELSE 0 END
+            ";
+            $bindings[] = $token;
+            $bindings[] = $token;
+
+            if ($fechaDesde) {
+                $bindings[] = $fechaDesde;
+            }
+
+            $parts[] = "
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM habilidades_usuario hu
+                    JOIN habilidades hb ON hb.id_habilidad = hu.habilidad_id
+                    WHERE hu.usuario_id = usuarios.id_usuario
+                    AND hu.es_visible IS TRUE
+                    AND hb.estado IS TRUE
+                    AND (
+                        hb.nombre ILIKE ?
+                        OR hb.nombre_normalizado ILIKE ?
+                    )
+                    " . ($fechaDesde ? " AND DATE(hu.created_at) >= ? " : "") . "
+                ) THEN 25 ELSE 0 END
+            ";
+            $bindings[] = $like;
+            $bindings[] = $like;
+
+            if ($fechaDesde) {
+                $bindings[] = $fechaDesde;
+            }
+
+            $parts[] = "
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM experiencias ex
+                    WHERE ex.usuario_id = usuarios.id_usuario
+                    AND ex.es_publico IS TRUE
+                    AND ex.cargo ILIKE ?
+                    " . ($fechaDesde ? " AND DATE(ex.fecha_inicio) >= ? " : "") . "
+                ) THEN 18 ELSE 0 END
+            ";
+            $bindings[] = $like;
+
+            if ($fechaDesde) {
+                $bindings[] = $fechaDesde;
+            }
+
+            $parts[] = "
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM participaciones par
+                    JOIN proyectos p2 ON p2.id_proyecto = par.id_proyecto
+                    JOIN uso_tecnologias ut ON ut.id_proyecto = p2.id_proyecto
+                    JOIN tecnologias t ON t.id_tecnologia = ut.id_tecnologia
+                    WHERE par.id_usuario = usuarios.id_usuario
+                    AND par.visibilidad = 'publico'
+                    AND par.deleted_at IS NULL
+                    AND p2.deleted_at IS NULL
+                    AND ut.deleted_at IS NULL
+                    AND ut.es_visible IS TRUE
+                    AND LOWER(t.nombre) = ?
+                    " . ($fechaDesde ? " AND DATE(par.fecha_inicio) >= ? " : "") . "
+                ) THEN 35 ELSE 0 END
+            ";
+            $bindings[] = $token;
+
+            if ($fechaDesde) {
+                $bindings[] = $fechaDesde;
+            }
+
+            $parts[] = "
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM participaciones par
+                    JOIN proyectos p2 ON p2.id_proyecto = par.id_proyecto
+                    JOIN uso_tecnologias ut ON ut.id_proyecto = p2.id_proyecto
+                    JOIN tecnologias t ON t.id_tecnologia = ut.id_tecnologia
+                    WHERE par.id_usuario = usuarios.id_usuario
+                    AND par.visibilidad = 'publico'
+                    AND par.deleted_at IS NULL
+                    AND p2.deleted_at IS NULL
+                    AND ut.deleted_at IS NULL
+                    AND ut.es_visible IS TRUE
+                    AND t.nombre ILIKE ?
+                    " . ($fechaDesde ? " AND DATE(par.fecha_inicio) >= ? " : "") . "
+                ) THEN 22 ELSE 0 END
+            ";
+            $bindings[] = $like;
+
+            if ($fechaDesde) {
+                $bindings[] = $fechaDesde;
+            }
+        }
+
+        $sql = implode(' + ', $parts);
+
+        $q->selectRaw("({$sql}) AS relevancia_textual", $bindings);
+    }
+
+
+
+
+
+
+    // funcion auxiliar para normalizar arrays de filtros
+
+    private function normalize(array $arr): array
+    {
+        return array_values(array_filter(array_map(
+            fn($v) => Str::lower(Str::ascii(trim((string) $v))),
+            $arr
+        )));
+    }
+   
+    //funcion auxiliar para normalizar arrays de filtros de enums (reemplaza espacios por guiones bajos)
+     private function normalizeEnum(array $arr): array
+    {
+        return array_map(
+            fn($v) => str_replace(' ', '_', $v),
+            $this->normalize($arr)
+        );
+    }
+
+
+    private function applyFechaDesdeFilter($q, array $f): void
+    {
+        $fechaDesde = data_get($f, 'orden.fecha_desde');
+
+        if (!empty($fechaDesde)) {
+            $q->whereDate('usuarios.created_at', '>=', $fechaDesde);
+        }
+    }
+
+    private function fechaDesde(array $f): ?string
+    {
+        $fechaDesde = data_get($f, 'orden.fecha_desde');
+
+        return !empty($fechaDesde) ? $fechaDesde : null;
+    }
+
+
+    public function getProfesiones()
+    {
+        return DB::table('perfiles')
+            ->join('usuarios', 'usuarios.id_usuario', '=', 'perfiles.usuario_id')
+            ->join('visibilidad_campos as vis_profesion', function ($join) {
+                $join->on('vis_profesion.usuario_id', '=', 'usuarios.id_usuario')
+                    ->whereRaw("vis_profesion.campo = 'profesion'");
+            })
+            ->select('perfiles.profesion')
+            ->where('usuarios.estado', 'activo')
+            ->whereRaw('perfiles.es_publico IS TRUE')
+            ->whereRaw('vis_profesion.visible IS TRUE')
+            ->whereNotNull('perfiles.profesion')
+            ->where('perfiles.profesion', '<>', '')
+            ->distinct()
+            ->orderBy('perfiles.profesion')
+            ->pluck('perfiles.profesion');
+    }
+
+    public function getHabilidadesBlandas()
+    {
+        return Habilidad::query()
+            ->whereRaw('estado IS TRUE')
+            ->where('tipo', 'blanda')
+            ->orderBy('nombre')
+            ->pluck('nombre');
+    }
+
+    public function getHabilidadesTecnicas()
+    {
+        return Habilidad::query()
+            ->whereRaw('estado IS TRUE')
+            ->where('tipo', 'tecnica')
+            ->orderBy('nombre')
+            ->pluck('nombre');
+    }
+
+    public function getCargosExperiencia()
+    {
+        return DB::table('experiencias as ex')
+            ->select('ex.cargo')
+            ->whereRaw('ex.es_publico IS TRUE')
+            ->whereNotNull('ex.cargo')
+            ->where('ex.cargo', '<>', '')
+            ->distinct()
+            ->orderBy('ex.cargo')
+            ->pluck('ex.cargo');
+    }
+
+    public function getTecnologiasProyecto()
+    {
+        return DB::table('tecnologias as t')
+            ->join('uso_tecnologias as ut', 'ut.id_tecnologia', '=', 't.id_tecnologia')
+            ->join('proyectos as p', 'p.id_proyecto', '=', 'ut.id_proyecto')
+            ->join('participaciones as par', 'par.id_proyecto', '=', 'p.id_proyecto')
+            ->whereNull('ut.deleted_at')
+            ->whereNull('p.deleted_at')
+            ->whereRaw('ut.es_visible IS TRUE')
+            ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
+            ->distinct()
+            ->orderBy('t.nombre')
+            ->pluck('t.nombre');
+    }
+
+    public function getTiposProyecto()
+    {
+        return DB::table('proyectos as p')
+            ->join('participaciones as par', 'par.id_proyecto', '=', 'p.id_proyecto')
+            ->whereNull('p.deleted_at')
+            ->whereNull('par.deleted_at')
+            ->where('par.visibilidad', 'publico')
+            ->whereNotNull('p.categoria_proyecto')
+            ->where('p.categoria_proyecto', '<>', '')
+            ->distinct()
+            ->orderBy('p.categoria_proyecto')
+            ->pluck('p.categoria_proyecto');
+    }
+}
