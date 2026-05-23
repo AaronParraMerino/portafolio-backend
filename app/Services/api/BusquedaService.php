@@ -18,8 +18,10 @@ class BusquedaService
         $this->applyFilteredSubqueries($q, $f, $filtros);
 
         $idsFinalistas = $this->getFinalistIds($q);
+        $ctxOrden = $this->contextoOrden($f, $filtros);
 
         $this->applyUnfilteredSubqueries($q, $idsFinalistas, $f, $filtros);
+        $this->applyOrderSubqueries($q, $idsFinalistas, $f, $filtros, $ctxOrden);
         $this->applyRelatedItemsSubquery($q, $idsFinalistas, $f);
         $this->addSearchSelects($q, $f, $filtros['query']);
         $this->applyOrdering($q, $f, $filtros);
@@ -36,6 +38,41 @@ class BusquedaService
             'habilidades' => $this->tieneValores(data_get($f, 'habilidades')),
             'experiencia' => $this->tieneValores(data_get($f, 'experiencia')),
             'proyectos' => $this->tieneValores(data_get($f, 'proyectos')),
+        ];
+    }
+
+    /** Construye el contexto usado solo para ordenar */
+    private function contextoOrden(array $f, array $filtros): array
+    {
+        $queryTokens = $filtros['query'] ? $this->queryTokens((string) data_get($f, 'query', '')) : [];
+
+        $skillTokens = array_merge(
+            $this->normalize((array) data_get($f, 'habilidades.tecnicas.items', [])),
+            $this->normalize((array) data_get($f, 'habilidades.blandas.items', [])),
+            $this->tokensEnHabilidades($queryTokens)
+        );
+
+        $skillTechTokens = array_merge(
+            $this->normalize((array) data_get($f, 'habilidades.tecnicas.items', [])),
+            $this->tokensEnHabilidades($queryTokens, 'tecnica')
+        );
+
+        $expTokens = array_merge(
+            $this->experienceCargoTokens($f),
+            $this->tokensEnExperiencias($queryTokens)
+        );
+
+        $projectTokens = array_merge(
+            $this->normalize((array) data_get($f, 'proyectos.tecnologias', [])),
+            $this->tokensEnTecnologiasProyecto($queryTokens)
+        );
+
+        return [
+            'query_tokens' => $queryTokens,
+            'skill_tokens' => $this->unique($skillTokens),
+            'skill_tech_tokens' => $this->unique($skillTechTokens),
+            'exp_tokens' => $this->unique($expTokens),
+            'project_tokens' => $this->unique($projectTokens),
         ];
     }
 
@@ -111,6 +148,36 @@ class BusquedaService
         if (!$filtros['proyectos']) {
             $this->leftJoinSubquery($q, $this->subProyectosSinFiltro($idsFinalistas, $f), 'p');
         }
+    }
+
+    /** Une subconsultas usadas exclusivamente para ordenar */
+    private function applyOrderSubqueries($q, array $idsFinalistas, array $f, array $filtros, array $ctx): void
+    {
+        $h = $filtros['habilidades']
+            ? $this->subHabilidades($f)
+            : (!empty($ctx['skill_tokens'])
+                ? $this->subHabilidadesPorTokens($idsFinalistas, $f, $ctx['skill_tokens'])
+                : (!empty($ctx['project_tokens'])
+                    ? $this->subHabilidadesPorTokens($idsFinalistas, $f, $ctx['project_tokens'], 'tecnica')
+                    : $this->subHabilidadesSinFiltro($idsFinalistas, $f)));
+
+        $e = $filtros['experiencia']
+            ? $this->subExperiencias($f)
+            : (!empty($ctx['exp_tokens'])
+                ? $this->subExperienciasPorTokens($idsFinalistas, $f, $ctx['exp_tokens'])
+                : $this->subExperienciasSinFiltro($idsFinalistas, $f));
+
+        $p = $filtros['proyectos']
+            ? $this->subProyectos($f)
+            : (!empty($ctx['project_tokens'])
+                ? $this->subProyectosPorTokens($idsFinalistas, $f, $ctx['project_tokens'])
+                : (!empty($ctx['skill_tech_tokens'])
+                    ? $this->subProyectosPorTokens($idsFinalistas, $f, $ctx['skill_tech_tokens'])
+                    : $this->subProyectosSinFiltro($idsFinalistas, $f)));
+
+        $this->leftJoinSubquery($q, $h, 'oh');
+        $this->leftJoinSubquery($q, $e, 'oe');
+        $this->leftJoinSubquery($q, $p, 'op');
     }
 
     /** Une una subconsulta por usuario */
@@ -495,6 +562,29 @@ class BusquedaService
             ->groupBy('x.usuario_id');
     }
 
+    /** Construye subconsulta de habilidades para ordenar por tokens */
+    private function subHabilidadesPorTokens(array $ids, array $f, array $tokens, ?string $tipo = null)
+    {
+        $q = DB::table('habilidades_usuario as hu')
+            ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
+            ->select('hu.usuario_id', DB::raw('COUNT(DISTINCT hb.id_habilidad) as total'))
+            ->whereRaw('hu.es_visible IS TRUE')
+            ->whereRaw('hb.estado IS TRUE')
+            ->whereIn('hu.usuario_id', $ids);
+
+        if ($tipo) {
+            $q->where('hb.tipo', $tipo);
+        }
+
+        $this->applyTokenWhere($q, ['hb.nombre', 'hb.nombre_normalizado'], $tokens);
+
+        if ($fechaDesde = $this->fechaDesde($f)) {
+            $q->whereDate('hu.created_at', '>=', $fechaDesde);
+        }
+
+        return $q->groupBy('hu.usuario_id');
+    }
+
     /** Construye subconsulta de experiencias sin filtro */
     private function subExperienciasSinFiltro(array $ids, array $f)
     {
@@ -506,6 +596,23 @@ class BusquedaService
             ->whereIn('ex.usuario_id', $ids);
 
         if ($fechaDesde) {
+            $q->whereDate('ex.fecha_inicio', '>=', $fechaDesde);
+        }
+
+        return $q->groupBy('ex.usuario_id');
+    }
+
+    /** Construye subconsulta de experiencias para ordenar por tokens */
+    private function subExperienciasPorTokens(array $ids, array $f, array $tokens)
+    {
+        $q = DB::table('experiencias as ex')
+            ->select('ex.usuario_id', DB::raw('COUNT(DISTINCT ex.id_experiencia) as total'))
+            ->whereRaw('ex.es_publico IS TRUE')
+            ->whereIn('ex.usuario_id', $ids);
+
+        $this->applyTokenWhere($q, ['ex.cargo'], $tokens);
+
+        if ($fechaDesde = $this->fechaDesde($f)) {
             $q->whereDate('ex.fecha_inicio', '>=', $fechaDesde);
         }
 
@@ -526,6 +633,33 @@ class BusquedaService
             ->whereIn('par.id_usuario', $ids);
 
         if ($fechaDesde) {
+            $q->whereDate('par.fecha_inicio', '>=', $fechaDesde);
+        }
+
+        return $q->groupBy('par.id_usuario');
+    }
+
+    /** Construye subconsulta de proyectos para ordenar por tecnologias */
+    private function subProyectosPorTokens(array $ids, array $f, array $tokens)
+    {
+        $q = DB::table('participaciones as par')
+            ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
+            ->select('par.id_usuario as usuario_id', DB::raw('COUNT(DISTINCT p.id_proyecto) as total'))
+            ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
+            ->whereNull('p.deleted_at')
+            ->whereIn('par.id_usuario', $ids)
+            ->whereExists(function ($s) use ($tokens) {
+                $s->from('uso_tecnologias as ut')
+                    ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+                    ->whereColumn('ut.id_proyecto', 'p.id_proyecto')
+                    ->whereNull('ut.deleted_at')
+                    ->whereRaw('ut.es_visible IS TRUE');
+
+                $this->applyTokenWhere($s, ['t.nombre'], $tokens);
+            });
+
+        if ($fechaDesde = $this->fechaDesde($f)) {
             $q->whereDate('par.fecha_inicio', '>=', $fechaDesde);
         }
 
@@ -662,25 +796,26 @@ class BusquedaService
     /** Aplica ordenamiento final */
     private function applyOrdering($q, array $f, array $filtros): void
     {
-        $o = data_get($f, 'orden', []);
-        $dir = strtolower(data_get($o, 'direccion', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $asc = $this->ordenAscendente($f);
+        $dir = $asc ? 'asc' : 'desc';
+        $idDir = $asc ? 'desc' : 'asc';
 
         if ($filtros['query']) {
-            $bindings = [];
-            $matchedTokensSql = $this->queryMatchedTokensSql($f, $bindings);
-
-            $q->orderByRaw("({$matchedTokensSql}) DESC", $bindings);
-            $q->orderByRaw('relevancia_textual DESC');
-            $this->applyRelevanceOrdering($q, 'desc');
-            $q->orderBy('usuarios.id_usuario', 'asc');
+            $q->orderByRaw("relevancia_textual {$dir}");
+            $this->applyMetricOrdering($q, $f, $dir);
+            $q->orderBy('usuarios.id_usuario', $idDir);
             return;
         }
 
-        $this->applyPriorityOrdering($q, $o, $dir, $f, $filtros);
-        $this->applyRelevanceOrdering($q, $dir);
-        $q->orderBy('usuarios.id_usuario', 'asc');
+        $this->applyMetricOrdering($q, $f, $dir);
+        $q->orderBy('usuarios.id_usuario', $idDir);
     }
 
+    /** Indica si el orden final debe invertirse */
+    private function ordenAscendente(array $f): bool
+    {
+        return strtolower((string) data_get($f, 'orden.direccion', 'desc')) === 'asc';
+    }
 
     /** Genera SQL para contar tokens coincidentes */
     private function queryMatchedTokensSql(array $f, array &$bindings): string
@@ -778,50 +913,43 @@ class BusquedaService
         return implode(' + ', $parts);
     }
 
-    /** Aplica ordenamiento por prioridad */
-    private function applyPriorityOrdering($q, array $o, string $dir, array $f, array $filtros): void
+    /** Ordena combinando coincidencias y conteos visibles */
+    private function applyMetricOrdering($q, array $f, string $dir): void
     {
-        if (!empty($o['priorizar_proyectos'])) {
-            $q->orderByRaw("COALESCE(p.total, 0) {$dir}");
-            return;
-        }
+        foreach ($this->metricOrder($f) as $metric) {
+            [$matchAlias, $visibleAlias] = $this->metricAliases($metric);
 
-        if (!empty($o['priorizar_experiencia'])) {
-            $q->orderByRaw("COALESCE(e.total, 0) {$dir}");
-            return;
-        }
-
-        if (!empty($o['priorizar_habilidades'])) {
-            $q->orderByRaw("COALESCE(h.total, 0) {$dir}");
-            return;
-        }
-
-        if ($filtros['usuario'] || $filtros['habilidades']) {
-            $q->orderByRaw("COALESCE(h.total, 0) {$dir}");
-            return;
-        }
-
-        if ($filtros['proyectos']) {
-            $q->orderByRaw("COALESCE(p.total, 0) {$dir}");
-            return;
-        }
-
-        if ($filtros['experiencia']) {
-            $q->orderByRaw("COALESCE(e.total, 0) {$dir}");
-            return;
+            $q->orderByRaw("COALESCE({$matchAlias}.total, 0) {$dir}");
+            $q->orderByRaw("COALESCE({$visibleAlias}.total, 0) {$dir}");
         }
     }
 
-    /** Aplica ordenamiento por relevancia */
-    private function applyRelevanceOrdering($q, string $dir): void
+    /** Obtiene orden de metricas */
+    private function metricOrder(array $f): array
     {
-        $q->orderByRaw("
-            (
-                COALESCE(h.total, 0) * 3 +
-                COALESCE(e.total, 0) * 2 +
-                COALESCE(p.total, 0) * 1
-            ) {$dir}
-        ");
+        if (data_get($f, 'orden.priorizar_proyectos')) {
+            return ['proyectos', 'habilidades', 'experiencia'];
+        }
+
+        if (data_get($f, 'orden.priorizar_habilidades')) {
+            return ['habilidades', 'proyectos', 'experiencia'];
+        }
+
+        if (data_get($f, 'orden.priorizar_experiencia')) {
+            return ['experiencia', 'proyectos', 'habilidades'];
+        }
+
+        return ['proyectos', 'habilidades', 'experiencia'];
+    }
+
+    /** Relaciona metricas de coincidencia con metricas visibles */
+    private function metricAliases(string $metric): array
+    {
+        return match ($metric) {
+            'habilidades' => ['oh', 'h'],
+            'experiencia' => ['oe', 'e'],
+            default => ['op', 'p'],
+        };
     }
 
     /** Convierte el texto en tokens */
@@ -900,6 +1028,72 @@ class BusquedaService
     }
 
     /** Aplica coincidencias por tokens */
+    private function applyTokenWhere($q, array $columns, array $tokens): void
+    {
+        $q->where(function ($w) use ($columns, $tokens) {
+            foreach ($tokens as $token) {
+                foreach ($columns as $column) {
+                    $w->orWhere($column, 'ilike', "%{$token}%");
+                }
+            }
+        });
+    }
+
+    /** Detecta tokens existentes en habilidades */
+    private function tokensEnHabilidades(array $tokens, ?string $tipo = null): array
+    {
+        return $this->tokensConMatch($tokens, function ($token) use ($tipo) {
+            $q = DB::table('habilidades as hb')
+                ->whereRaw('hb.estado IS TRUE')
+                ->where(function ($w) use ($token) {
+                    $w->where('hb.nombre', 'ilike', "%{$token}%")
+                        ->orWhere('hb.nombre_normalizado', 'ilike', "%{$token}%");
+                });
+
+            if ($tipo) {
+                $q->where('hb.tipo', $tipo);
+            }
+
+            return $q->exists();
+        });
+    }
+
+    /** Detecta tokens existentes en experiencias */
+    private function tokensEnExperiencias(array $tokens): array
+    {
+        return $this->tokensConMatch($tokens, function ($token) {
+            return DB::table('experiencias as ex')
+                ->whereRaw('ex.es_publico IS TRUE')
+                ->where('ex.cargo', 'ilike', "%{$token}%")
+                ->exists();
+        });
+    }
+
+    /** Detecta tokens existentes en tecnologias de proyectos */
+    private function tokensEnTecnologiasProyecto(array $tokens): array
+    {
+        return $this->tokensConMatch($tokens, function ($token) {
+            return DB::table('tecnologias as t')
+                ->join('uso_tecnologias as ut', 'ut.id_tecnologia', '=', 't.id_tecnologia')
+                ->join('proyectos as p', 'p.id_proyecto', '=', 'ut.id_proyecto')
+                ->join('participaciones as par', 'par.id_proyecto', '=', 'p.id_proyecto')
+                ->whereNull('ut.deleted_at')
+                ->whereNull('p.deleted_at')
+                ->whereNull('par.deleted_at')
+                ->whereRaw('ut.es_visible IS TRUE')
+                ->where('par.visibilidad', 'publico')
+                ->where('t.nombre', 'ilike', "%{$token}%")
+                ->exists();
+        });
+    }
+
+    /** Filtra tokens con coincidencia real */
+    private function tokensConMatch(array $tokens, callable $callback): array
+    {
+        return array_values(array_filter($tokens, fn($token) => $callback($token)));
+    }
+
+    /** Aplica coincidencias por tokens */
     private function applyRelatedTokenWhere($q, array $columns, array $tokens): void
     {
         $q->where(function ($w) use ($columns, $tokens) {
@@ -911,182 +1105,19 @@ class BusquedaService
         });
     }
 
-    /** Agrega relevancia textual */
+    /** Agrega cantidad de palabras coincidentes */
     private function addQueryRelevanceSelect($q, array $f): void
     {
-        $query = trim((string) data_get($f, 'query', ''));
-        $tokens = $this->queryTokens($query);
-        $fechaDesde = $this->fechaDesde($f);
-
-        if (empty($tokens)) {
-            $q->selectRaw('0 AS relevancia_textual');
-            return;
-        }
-
-        $parts = [];
         $bindings = [];
-        $full = Str::lower(Str::ascii($query));
-        $fullLike = "%{$full}%";
+        $sql = $this->queryMatchedTokensSql($f, $bindings);
 
-        $parts[] = "CASE WHEN LOWER(usuarios.nombre || ' ' || usuarios.apellido) = ? THEN 100 ELSE 0 END";
-        $bindings[] = $full;
-
-        $parts[] = "CASE WHEN LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE ? THEN 60 ELSE 0 END";
-        $bindings[] = $fullLike;
-
-        foreach ($tokens as $token) {
-            $like = "%{$token}%";
-
-            $this->addUserRelevanceParts($parts, $bindings, $token, $like);
-            $this->addProfileRelevanceParts($parts, $bindings, $like);
-            $this->addSkillRelevanceParts($parts, $bindings, $token, $like, $fechaDesde);
-            $this->addExperienceRelevanceParts($parts, $bindings, $like, $fechaDesde);
-            $this->addProjectRelevanceParts($parts, $bindings, $token, $like, $fechaDesde);
-        }
-
-        $q->selectRaw('(' . implode(' + ', $parts) . ') AS relevancia_textual', $bindings);
+        $q->selectRaw("({$sql}) AS relevancia_textual", $bindings);
     }
 
-    /** Agrega relevancia de usuario */
-    private function addUserRelevanceParts(array &$parts, array &$bindings, string $token, string $like): void
+    /** Limpia repetidos y vacios */
+    private function unique(array $arr): array
     {
-        $parts[] = "CASE WHEN LOWER(usuarios.nombre) = ? OR LOWER(usuarios.apellido) = ? THEN 35 ELSE 0 END";
-        $bindings[] = $token;
-        $bindings[] = $token;
-
-        $parts[] = "CASE WHEN LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE ? THEN 20 ELSE 0 END";
-        $bindings[] = $like;
-    }
-
-    /** Agrega relevancia de perfil */
-    private function addProfileRelevanceParts(array &$parts, array &$bindings, string $like): void
-    {
-        $parts[] = "CASE WHEN COALESCE(vis_profesion.visible, false) = true AND perfiles.profesion ILIKE ? THEN 15 ELSE 0 END";
-        $bindings[] = $like;
-
-        $parts[] = "CASE WHEN COALESCE(vis_ciudad.visible, false) = true AND perfiles.ciudad ILIKE ? THEN 8 ELSE 0 END";
-        $bindings[] = $like;
-
-        $parts[] = "CASE WHEN COALESCE(vis_pais.visible, false) = true AND perfiles.pais ILIKE ? THEN 8 ELSE 0 END";
-        $bindings[] = $like;
-    }
-
-    /** Agrega relevancia de habilidades */
-    private function addSkillRelevanceParts(array &$parts, array &$bindings, string $token, string $like, ?string $fechaDesde): void
-    {
-        $parts[] = "
-            CASE WHEN EXISTS (
-                SELECT 1
-                FROM habilidades_usuario hu
-                JOIN habilidades hb ON hb.id_habilidad = hu.habilidad_id
-                WHERE hu.usuario_id = usuarios.id_usuario
-                AND hu.es_visible IS TRUE
-                AND hb.estado IS TRUE
-                AND (
-                    LOWER(hb.nombre_normalizado) = ?
-                    OR LOWER(hb.nombre) = ?
-                )
-                " . ($fechaDesde ? " AND DATE(hu.created_at) >= ? " : "") . "
-            ) THEN 40 ELSE 0 END
-        ";
-        $bindings[] = $token;
-        $bindings[] = $token;
-
-        if ($fechaDesde) {
-            $bindings[] = $fechaDesde;
-        }
-
-        $parts[] = "
-            CASE WHEN EXISTS (
-                SELECT 1
-                FROM habilidades_usuario hu
-                JOIN habilidades hb ON hb.id_habilidad = hu.habilidad_id
-                WHERE hu.usuario_id = usuarios.id_usuario
-                AND hu.es_visible IS TRUE
-                AND hb.estado IS TRUE
-                AND (
-                    hb.nombre ILIKE ?
-                    OR hb.nombre_normalizado ILIKE ?
-                )
-                " . ($fechaDesde ? " AND DATE(hu.created_at) >= ? " : "") . "
-            ) THEN 25 ELSE 0 END
-        ";
-        $bindings[] = $like;
-        $bindings[] = $like;
-
-        if ($fechaDesde) {
-            $bindings[] = $fechaDesde;
-        }
-    }
-
-    /** Agrega relevancia de experiencias */
-    private function addExperienceRelevanceParts(array &$parts, array &$bindings, string $like, ?string $fechaDesde): void
-    {
-        $parts[] = "
-            CASE WHEN EXISTS (
-                SELECT 1
-                FROM experiencias ex
-                WHERE ex.usuario_id = usuarios.id_usuario
-                AND ex.es_publico IS TRUE
-                AND ex.cargo ILIKE ?
-                " . ($fechaDesde ? " AND DATE(ex.fecha_inicio) >= ? " : "") . "
-            ) THEN 18 ELSE 0 END
-        ";
-        $bindings[] = $like;
-
-        if ($fechaDesde) {
-            $bindings[] = $fechaDesde;
-        }
-    }
-
-    /** Agrega relevancia de proyectos */
-    private function addProjectRelevanceParts(array &$parts, array &$bindings, string $token, string $like, ?string $fechaDesde): void
-    {
-        $parts[] = "
-            CASE WHEN EXISTS (
-                SELECT 1
-                FROM participaciones par
-                JOIN proyectos p2 ON p2.id_proyecto = par.id_proyecto
-                JOIN uso_tecnologias ut ON ut.id_proyecto = p2.id_proyecto
-                JOIN tecnologias t ON t.id_tecnologia = ut.id_tecnologia
-                WHERE par.id_usuario = usuarios.id_usuario
-                AND par.visibilidad = 'publico'
-                AND par.deleted_at IS NULL
-                AND p2.deleted_at IS NULL
-                AND ut.deleted_at IS NULL
-                AND ut.es_visible IS TRUE
-                AND LOWER(t.nombre) = ?
-                " . ($fechaDesde ? " AND DATE(par.fecha_inicio) >= ? " : "") . "
-            ) THEN 35 ELSE 0 END
-        ";
-        $bindings[] = $token;
-
-        if ($fechaDesde) {
-            $bindings[] = $fechaDesde;
-        }
-
-        $parts[] = "
-            CASE WHEN EXISTS (
-                SELECT 1
-                FROM participaciones par
-                JOIN proyectos p2 ON p2.id_proyecto = par.id_proyecto
-                JOIN uso_tecnologias ut ON ut.id_proyecto = p2.id_proyecto
-                JOIN tecnologias t ON t.id_tecnologia = ut.id_tecnologia
-                WHERE par.id_usuario = usuarios.id_usuario
-                AND par.visibilidad = 'publico'
-                AND par.deleted_at IS NULL
-                AND p2.deleted_at IS NULL
-                AND ut.deleted_at IS NULL
-                AND ut.es_visible IS TRUE
-                AND t.nombre ILIKE ?
-                " . ($fechaDesde ? " AND DATE(par.fecha_inicio) >= ? " : "") . "
-            ) THEN 22 ELSE 0 END
-        ";
-        $bindings[] = $like;
-
-        if ($fechaDesde) {
-            $bindings[] = $fechaDesde;
-        }
+        return array_values(array_unique(array_filter($arr, fn($v) => trim((string) $v) !== '')));
     }
 
     /** Normaliza textos */
