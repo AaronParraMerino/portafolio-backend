@@ -10,9 +10,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-use App\Services\api\ProyectoNotificacionGuardadoService;
-
-
 class ProyectoController extends Controller
 {
     private const TIPO_REPOS = 'repositorio';
@@ -24,7 +21,6 @@ class ProyectoController extends Controller
     public function __construct(
         private readonly GithubRepositorySyncService $githubRepositorySyncService,
         private readonly TecnologiaService $tecnologiaService,
-        private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
     ) {
     }
 
@@ -160,13 +156,6 @@ class ProyectoController extends Controller
             ->where('id_proyecto', $id)
             ->update($payload);
 
-        //seccion para notificar
-        $this->proyectoNotificacionGuardadoService->notificarConfiguracionActualizada(
-            idProyecto: $id,
-            idUsuarioActor: $userId
-        );
-        //fin seccion para notificar
-
         return response()->json([
             'message' => 'Configuracion actualizada correctamente',
             'data' => [
@@ -199,14 +188,6 @@ class ProyectoController extends Controller
                 'rol' => $payload['rol'] ?? null,
                 'descripcion_aporte' => $payload['descripcion_aporte'] ?? null,
             ]);
-
-        ///seccion para notificar
-                    $this->proyectoNotificacionGuardadoService->notificarNuevoParticipante(
-                idProyecto: $existingProjectId,
-                idUsuarioNuevo: $userId,
-                idUsuarioActor: $userId
-            );
-        ///fin seccion para notificar
 
             $project = $this->findProjectForUser($userId, $existingProjectId);
             return response()->json([
@@ -350,14 +331,6 @@ class ProyectoController extends Controller
         $this->syncProjectRepositories($userId, $id, $payload);
         $this->syncProjectTechnologies($userId, $id, $payload);
 
-        //seccion para notificar
-            $this->proyectoNotificacionGuardadoService->notificarProyectoActualizado(
-            idProyecto: $id,
-            idUsuarioActor: $userId,
-            payload: $payload
-        );
-        //fin seccion para notificar
-
         $updated = $this->findProjectForUser($userId, $id);
         return response()->json(['data' => $this->serializeProject($updated)]);
     }
@@ -378,13 +351,6 @@ class ProyectoController extends Controller
             'deleted_at' => now(),
             'updated_at' => now(),
         ]);
-
-        //seccion para notificar
-            $this->proyectoNotificacionGuardadoService->notificarProyectoEliminado(
-        idProyecto: $id,
-        idUsuarioActor: $userId
-    );
-        //fin seccion para notificar
 
         return response()->json(['message' => 'Proyecto eliminado correctamente']);
     }
@@ -433,13 +399,6 @@ class ProyectoController extends Controller
                     'updated_at' => now(),
                 ]);
         });
-
-        //seccion para notificar
-            $this->proyectoNotificacionGuardadoService->notificarParticipanteDesvinculado(
-            idProyecto: $id,
-            idUsuarioDesvinculado: $userId
-        );
-        //fin seccion para notificar
 
         return response()->json(['message' => 'Participacion desvinculada correctamente']);
     }
@@ -497,13 +456,6 @@ class ProyectoController extends Controller
                 ]);
         });
 
-        //seccion para notificar
-            $this->proyectoNotificacionGuardadoService->notificarParticipanteRemovido(
-            idProyecto: $id,
-            idUsuarioRemovido: (int) $participacion->id_usuario,
-            idUsuarioActor: $userId
-        );
-        //fin seccion para notificar
         return response()->json(['message' => 'Participacion sin validacion quitada correctamente']);
     }
 
