@@ -9,6 +9,7 @@ use App\Services\api\TecnologiaService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class ProyectoController extends Controller
@@ -498,6 +499,7 @@ class ProyectoController extends Controller
             $upload = $this->uploadProjectFileToSupabase($file, "projects/{$id}/images");
             $path = $upload['path'];
             $url = $upload['url'];
+            $this->generateProjectVariantsSafely($file, $url);
 
             DB::table('proyecto_evidencias')->insert([
                 'id_proyecto' => $id,
@@ -554,9 +556,10 @@ class ProyectoController extends Controller
             foreach ($urls as $candidate) {
                 $normalizedCandidatePath = $this->normalizeStoragePathFromUrl((string) $candidate);
                 if ($candidate === $rowUrl || ($normalizedCandidatePath && $normalizedCandidatePath === $rowPath)) {
-                    if ($rowPath) {
-                        $this->deleteProjectFile($rowPath, $rowUrl);
+                    if ($rowUrl) {
+                        $this->profileImageVariants->deleteProjectVariants($rowUrl);
                     }
+                    $this->deleteProjectFile($rowPath ?: null, $rowUrl);
                     $toDeleteIds[] = $row->id_evidencia;
                     break;
                 }
@@ -807,6 +810,11 @@ class ProyectoController extends Controller
             ->map(function ($ev) {
                 $arr = (array) $ev;
                 $arr['archivo_url'] = $arr['url'] ?? null;
+                if (in_array(strtolower((string) ($arr['tipo'] ?? '')), [self::TIPO_IMAGEN, 'captura'], true)) {
+                    $variants = $this->profileImageVariants->getProjectVariantUrls($arr['url'] ?? null);
+                    $arr['imagen_card_url'] = $variants['card'] ?? null;
+                    $arr['imagen_detail_url'] = $variants['detail'] ?? null;
+                }
                 return $arr;
             })
             ->values();
@@ -1669,6 +1677,18 @@ class ProyectoController extends Controller
             'url' => rtrim($urlBase, '/') . '/storage/v1/object/public/' . $bucket . '/' . $path,
             'response' => $response,
         ];
+    }
+
+    private function generateProjectVariantsSafely($file, string $originalUrl): void
+    {
+        try {
+            $this->profileImageVariants->generateProjectFromUploadedFile($file, $originalUrl);
+        } catch (\Throwable $e) {
+            Log::warning('No se pudieron generar variantes de imagen de proyecto.', [
+                'url' => $originalUrl,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function deleteProjectFile(?string $path, ?string $url = null): void

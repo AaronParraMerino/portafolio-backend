@@ -37,6 +37,7 @@ class ProfileService
             ->toArray();
         
         $fotoVariantes = $this->imageVariants->getVariantUrls($perfil?->foto_perfil);
+        $bannerVariantes = $this->imageVariants->getBannerVariantUrls($perfil?->foto_fondo);
 
         return [
             'id' => $usuario->id_usuario,
@@ -53,6 +54,8 @@ class ProfileService
             'foto_perfil_small_url' => $fotoVariantes['small'] ?? null,
             'foto_perfil_thumb_url' => $fotoVariantes['thumb'] ?? null,
             'foto_fondo' => $perfil?->foto_fondo,
+            'foto_fondo_medium_url' => $bannerVariantes['medium'] ?? null,
+            'foto_fondo_small_url' => $bannerVariantes['small'] ?? null,
             'es_publico' => (bool) ($perfil?->es_publico ?? true),
             'portfolio_publico' => (bool) ($perfil?->es_publico ?? true),
 
@@ -348,6 +351,7 @@ class ProfileService
                 $this->generateProfileVariantsSafely($file, $urlImagen);
                 $perfil->foto_perfil = $urlImagen;
             } else {
+                $this->generateBannerVariantsSafely($file, $urlImagen);
                 $perfil->foto_fondo = $urlImagen;
             }
 
@@ -359,7 +363,7 @@ class ProfileService
                 'status' => true,
                 'message' => 'Imagen actualizada correctamente',
                 'url' => $urlImagen,
-                ...($tipo === 'profile' ? $this->variantResponse($urlImagen) : []),
+                ...($tipo === 'profile' ? $this->variantResponse($urlImagen) : $this->bannerVariantResponse($urlImagen)),
             ];
 
         } catch (\Exception $e) {
@@ -404,6 +408,8 @@ class ProfileService
             if ($urlImagen) {
                 if ($tipo === 'profile') {
                     $this->imageVariants->deleteVariants($urlImagen);
+                } else {
+                    $this->imageVariants->deleteBannerVariants($urlImagen);
                 }
                 $this->deleteImage($urlImagen);
             }
@@ -461,12 +467,16 @@ class ProfileService
 
             if ($tipo === 'profile') {
                 $this->generateProfileVariantsSafely($file, $urlNueva);
+            } else {
+                $this->generateBannerVariantsSafely($file, $urlNueva);
             }
 
             if ($urlAnterior) {
                 try {
                     if ($tipo === 'profile') {
                         $this->imageVariants->deleteVariants($urlAnterior);
+                    } else {
+                        $this->imageVariants->deleteBannerVariants($urlAnterior);
                     }
                     $this->deleteImage($urlAnterior);
                 } catch (\Exception $e) {
@@ -488,7 +498,7 @@ class ProfileService
                 'status' => true,
                 'message' => 'Imagen actualizada correctamente',
                 'url' => $urlNueva,
-                ...($tipo === 'profile' ? $this->variantResponse($urlNueva) : []),
+                ...($tipo === 'profile' ? $this->variantResponse($urlNueva) : $this->bannerVariantResponse($urlNueva)),
             ];
 
         } catch (\Exception $e) {
@@ -524,6 +534,27 @@ class ProfileService
             'foto_perfil_thumb_url' => $variants['thumb'] ?? null,
         ];
     }
-}
 
+    private function generateBannerVariantsSafely($file, string $originalUrl): void
+    {
+        try {
+            $this->imageVariants->generateBannerFromUploadedFile($file, $originalUrl);
+        } catch (\Throwable $e) {
+            Log::warning('No se pudieron generar variantes del banner.', [
+                'url' => $originalUrl,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function bannerVariantResponse(?string $originalUrl): array
+    {
+        $variants = $this->imageVariants->getBannerVariantUrls($originalUrl);
+
+        return [
+            'foto_fondo_medium_url' => $variants['medium'] ?? null,
+            'foto_fondo_small_url' => $variants['small'] ?? null,
+        ];
+    }
+}
 

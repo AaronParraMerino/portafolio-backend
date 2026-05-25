@@ -37,6 +37,7 @@ class PortafolioPublicoService
     {
         $perfil = $usuario->perfil;
         $fotoVariantes = $this->profileImageVariants->getVariantUrls($perfil?->foto_perfil);
+        $bannerVariantes = $this->profileImageVariants->getBannerVariantUrls($perfil?->foto_fondo);
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
             ->toArray();
@@ -68,6 +69,8 @@ class PortafolioPublicoService
             'foto_perfil_small_url' => $fotoVariantes['small'] ?? null,
             'foto_perfil_thumb_url' => $fotoVariantes['thumb'] ?? null,
             'foto_fondo' => $perfil?->foto_fondo,
+            'foto_fondo_medium_url' => $bannerVariantes['medium'] ?? null,
+            'foto_fondo_small_url' => $bannerVariantes['small'] ?? null,
             'es_publico' => $this->toBoolean($perfil?->es_publico, true),
             'portfolio_publico' => $this->toBoolean($perfil?->es_publico, true),
             'visibilidad' => $visibilidad,
@@ -180,6 +183,11 @@ class PortafolioPublicoService
             ->map(function ($ev) {
                 $arr = (array) $ev;
                 $arr['archivo_url'] = $arr['url'] ?? null;
+                if (in_array(strtolower((string) ($arr['tipo'] ?? '')), ['imagen', 'captura'], true)) {
+                    $variants = $this->profileImageVariants->getProjectVariantUrls($arr['url'] ?? null);
+                    $arr['imagen_card_url'] = $variants['card'] ?? null;
+                    $arr['imagen_detail_url'] = $variants['detail'] ?? null;
+                }
 
                 return $arr;
             })
