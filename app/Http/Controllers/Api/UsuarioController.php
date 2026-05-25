@@ -155,7 +155,7 @@ class UsuarioController extends Controller
         $usuario = $request->user();
 
         if (! Hash::check($request->password_actual, $usuario->password)) {
-            return response()->json(['message' => 'La contraseña actual es incorrecta.'], 401);
+            return response()->json(['message' => 'La contraseña actual es incorrecta.'], 422);
         }
 
         $usuario->password = Hash::make($request->password_nueva);

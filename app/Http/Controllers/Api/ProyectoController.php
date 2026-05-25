@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\api\GithubRepositorySyncService;
+use App\Services\api\ProfileImageVariantService;
 use App\Services\api\TecnologiaService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ class ProyectoController extends Controller
     public function __construct(
         private readonly GithubRepositorySyncService $githubRepositorySyncService,
         private readonly TecnologiaService $tecnologiaService,
+        private readonly ProfileImageVariantService $profileImageVariants,
     ) {
     }
 
@@ -1236,6 +1238,7 @@ class ProyectoController extends Controller
                 'descripcion_aporte' => $row->descripcion_aporte,
                 'es_propietario' => (bool) $row->es_propietario,
                 'foto_perfil' => $row->foto_perfil,
+                'avatar_thumb_url' => $this->profileImageVariants->getVariantUrl($row->foto_perfil, 'thumb'),
                 'github_avatar_url' => $row->github_foto_url,
                 'avatar_url' => $row->foto_perfil ?: $row->github_foto_url,
                 'source' => 'sistema',

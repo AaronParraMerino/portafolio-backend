@@ -8,7 +8,8 @@ use Illuminate\Support\Facades\DB;
 class PortafolioPublicoService
 {
     public function __construct(
-        private readonly PersonalizacionPortafolioService $personalizacionService
+        private readonly PersonalizacionPortafolioService $personalizacionService,
+        private readonly ProfileImageVariantService $profileImageVariants
     ) {
     }
 
@@ -35,6 +36,7 @@ class PortafolioPublicoService
     private function serializePerfil(Usuario $usuario, array $configVisibility = []): array
     {
         $perfil = $usuario->perfil;
+        $fotoVariantes = $this->profileImageVariants->getVariantUrls($perfil?->foto_perfil);
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
             ->toArray();
@@ -62,6 +64,9 @@ class PortafolioPublicoService
             'ciudad' => $visibilidad['ciudad'] ? $perfil?->ciudad : null,
             'pais' => $visibilidad['pais'] ? $perfil?->pais : null,
             'foto_perfil' => $perfil?->foto_perfil,
+            'foto_perfil_medium_url' => $fotoVariantes['medium'] ?? null,
+            'foto_perfil_small_url' => $fotoVariantes['small'] ?? null,
+            'foto_perfil_thumb_url' => $fotoVariantes['thumb'] ?? null,
             'foto_fondo' => $perfil?->foto_fondo,
             'es_publico' => $this->toBoolean($perfil?->es_publico, true),
             'portfolio_publico' => $this->toBoolean($perfil?->es_publico, true),
@@ -331,6 +336,7 @@ class PortafolioPublicoService
                     'descripcion_aporte' => $row->descripcion_aporte,
                     'es_propietario' => (bool) $row->es_propietario,
                     'foto_perfil' => $row->foto_perfil,
+                    'avatar_thumb_url' => $this->profileImageVariants->getVariantUrl($row->foto_perfil, 'thumb'),
                     'github_avatar_url' => $row->github_foto_url,
                     'avatar_url' => $row->foto_perfil ?: $row->github_foto_url,
                     'source' => 'sistema',
