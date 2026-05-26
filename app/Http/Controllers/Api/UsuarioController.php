@@ -36,6 +36,40 @@ class UsuarioController extends Controller
         return response()->json($usuario);
     }
 
+    public function preferenciaIdioma(Request $request): JsonResponse
+    {
+        $usuario = $request->user();
+
+        return response()->json([
+            'idioma_preferido' => $usuario->idioma_preferido ?: 'es',
+        ]);
+    }
+
+    public function actualizarPreferenciaIdioma(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'idioma' => ['required', 'in:es,en,pt'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Datos invÃ¡lidos',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $usuario = $request->user();
+        $usuario->idioma_preferido = $validator->validated()['idioma'];
+        $usuario->save();
+
+        return response()->json([
+            'message' => 'Idioma actualizado correctamente.',
+            'data' => [
+                'idioma_preferido' => $usuario->idioma_preferido,
+            ],
+        ]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
