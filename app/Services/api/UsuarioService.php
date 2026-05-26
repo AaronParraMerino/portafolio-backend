@@ -60,27 +60,14 @@ class UsuarioService
                 ->where('usuario_id', $usuario->id_usuario)
                 ->update(['es_visible' => DB::raw('FALSE')]);
 
+            DB::table('experiencias')
+                ->where('usuario_id', $usuario->id_usuario)
+                ->update(['es_publico' => DB::raw('FALSE')]);
+
             DB::table('participaciones')
                 ->where('id_usuario', $usuario->id_usuario)
                 ->whereNull('deleted_at')
                 ->update(['visibilidad' => 'privado']);
-
-            $proyectosPropios = DB::table('participaciones')
-                ->where('id_usuario', $usuario->id_usuario)
-                ->whereRaw('es_propietario = TRUE')
-                ->pluck('id_proyecto');
-
-            if ($proyectosPropios->isNotEmpty()) {
-                DB::table('proyecto_evidencias')
-                    ->whereIn('id_proyecto', $proyectosPropios)
-                    ->whereNull('deleted_at')
-                    ->update(['es_visible' => DB::raw('FALSE')]);
-
-                DB::table('uso_tecnologias')
-                    ->whereIn('id_proyecto', $proyectosPropios)
-                    ->whereNull('deleted_at')
-                    ->update(['es_visible' => DB::raw('FALSE')]);
-            }
 
             $usuario->tokens()->delete();
         });

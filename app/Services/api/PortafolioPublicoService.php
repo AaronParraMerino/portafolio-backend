@@ -17,7 +17,12 @@ class PortafolioPublicoService
     {
         $usuario = Usuario::with(['perfil', 'visibilidades'])->find($userId);
 
-        if (! $usuario || ! $usuario->perfil || ! $this->toBoolean($usuario->perfil->es_publico, true)) {
+        if (
+            ! $usuario
+            || $usuario->estado !== 'activo'
+            || ! $usuario->perfil
+            || ! $this->toBoolean($usuario->perfil->es_publico, true)
+        ) {
             return null;
         }
 
@@ -243,11 +248,8 @@ class PortafolioPublicoService
             ->filter()
             ->values();
 
-        $participantes = $this->getParticipantesValidados($id);
-        $participantesCount = DB::table('participaciones')
-            ->where('id_proyecto', $id)
-            ->whereNull('deleted_at')
-            ->count();
+        $participantes = $this->getParticipantesPublicos($id);
+        $participantesCount = count($participantes);
 
         return [
             ...$project,
@@ -272,8 +274,12 @@ class PortafolioPublicoService
         ];
     }
 
-    private function getParticipantesValidados(int $projectId): array
+    private function getParticipantesPublicos(int $projectId): array
     {
+        $mostrarSinValidacion = DB::table('proyecto_configuraciones')
+            ->where('id_proyecto', $projectId)
+            ->value('visibilidad_usuario_sin_validacion') !== 'oculto';
+
         $repos = DB::table('proyecto_repositorios as pr')
             ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
             ->where('pr.id_proyecto', $projectId)
@@ -324,15 +330,19 @@ class PortafolioPublicoService
                 ->groupBy('id_usuario');
 
         return $rows
-            ->map(function ($row) use ($validaciones) {
+            ->map(function ($row) use ($validaciones, $mostrarSinValidacion) {
                 $userValidaciones = $validaciones->get($row->id_usuario, collect());
-                $validacion = $userValidaciones->first(fn ($item) => (bool) $item->validado)
+                $validacion = $userValidaciones->first(fn ($item) => $this->toBoolean($item->validado))
                     ?? $userValidaciones->first();
-                $validado = (bool) ($validacion?->validado ?? $row->participacion_validada ?? false);
+                $validado = $this->toBoolean($validacion?->validado ?? $row->participacion_validada ?? false);
 
-                if (! $validado) {
+                if (! $validado && ! $mostrarSinValidacion) {
                     return null;
                 }
+
+                $tipoParticipante = $validado
+                    ? 'usuario_github_validado'
+                    : 'usuario_sin_validacion_github';
 
                 return [
                     'id' => 'participacion-' . $row->id_participacion,
@@ -348,15 +358,15 @@ class PortafolioPublicoService
                     'github_avatar_url' => $row->github_foto_url,
                     'avatar_url' => $row->foto_perfil ?: $row->github_foto_url,
                     'source' => 'sistema',
-                    'tipo_participante' => 'usuario_github_validado',
-                    'origen_participante' => 'usuario_github_validado',
+                    'tipo_participante' => $tipoParticipante,
+                    'origen_participante' => $tipoParticipante,
                     'tiene_cuenta' => true,
                     'tiene_vinculacion_github' => ! is_null($row->id_cuenta_oauth),
-                    'validacion_github' => true,
+                    'validacion_github' => $validado,
                     'github_id' => $row->provider_user_id,
                     'github_username' => $row->github_nombre,
                     'validacion' => [
-                        'validado' => true,
+                        'validado' => $validado,
                         'relacion_github' => $validacion->relacion_github ?? 'unknown',
                         'es_propietario' => (bool) ($validacion->es_propietario ?? false),
                         'ultima_verificacion_at' => $validacion->ultima_verificacion_at ?? null,

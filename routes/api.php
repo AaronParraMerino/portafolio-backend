@@ -12,6 +12,7 @@ require __DIR__.'/api/reactivacion-cuenta.php';
 ############# datos tabla usuario ##########
 require __DIR__.'/api/usuarios.php';
 require __DIR__.'/api/profile.php';
+require __DIR__.'/api/administrador.php';
 
 require __DIR__.'/api/experiencias.php';
 require __DIR__.'/api/habilidades.php';
