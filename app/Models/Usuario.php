@@ -76,4 +76,14 @@ class Usuario extends Authenticatable
     {
         return $this->hasOne(PersonalizacionPortafolio::class, 'usuario_id', 'id_usuario');
     }
+
+    public function notificaciones()
+    {
+    return $this->hasMany(Notificacion::class, 'id_usuario_destino', 'id_usuario');
+    }
+
+    public function notificacionesGeneradas()
+    {
+        return $this->hasMany(Notificacion::class, 'id_usuario_actor', 'id_usuario');
+    }
 }

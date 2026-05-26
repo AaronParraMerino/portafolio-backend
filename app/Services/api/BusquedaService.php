@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services\Api;
+namespace App\Services\api;
 
 use App\Models\Habilidad;
 use Illuminate\Support\Facades\DB;

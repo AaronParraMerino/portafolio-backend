@@ -27,6 +27,9 @@ require __DIR__.'/api/proyectos.php';
 
 ################# apis para busqueda ############################
 require __DIR__.'/api/busqueda.php';
+
+##################api notificaiones##############################
+require __DIR__.'/api/notificaciones.php';
 #############################################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
