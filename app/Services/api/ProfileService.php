@@ -7,10 +7,15 @@ use App\Models\Usuario;
 use App\Models\Perfil;
 use App\Models\VisibilidadCampo;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 use App\Services\BitacoraService;
 
 class ProfileService
 {
+    public function __construct(
+        private readonly ProfileImageVariantService $imageVariants
+    ) {
+    }
  
     /**
      * Obtiene el perfil completo de un usuario combinando datos de:
@@ -31,6 +36,9 @@ class ProfileService
             ->pluck('visible', 'campo')
             ->toArray();
         
+        $fotoVariantes = $this->imageVariants->getVariantUrls($perfil?->foto_perfil);
+        $bannerVariantes = $this->imageVariants->getBannerVariantUrls($perfil?->foto_fondo);
+
         return [
             'id' => $usuario->id_usuario,
             'nombre' => $usuario->nombre,
@@ -42,7 +50,12 @@ class ProfileService
             'ciudad' => $perfil?->ciudad,
             'pais' => $perfil?->pais,
             'foto_perfil' => $perfil?->foto_perfil,
+            'foto_perfil_medium_url' => $fotoVariantes['medium'] ?? null,
+            'foto_perfil_small_url' => $fotoVariantes['small'] ?? null,
+            'foto_perfil_thumb_url' => $fotoVariantes['thumb'] ?? null,
             'foto_fondo' => $perfil?->foto_fondo,
+            'foto_fondo_medium_url' => $bannerVariantes['medium'] ?? null,
+            'foto_fondo_small_url' => $bannerVariantes['small'] ?? null,
             'es_publico' => (bool) ($perfil?->es_publico ?? true),
             'portfolio_publico' => (bool) ($perfil?->es_publico ?? true),
 
@@ -335,8 +348,10 @@ class ProfileService
             $urlImagen = $this->uploadImage($file, $carpeta);
 
             if ($tipo === 'profile') {
+                $this->generateProfileVariantsSafely($file, $urlImagen);
                 $perfil->foto_perfil = $urlImagen;
             } else {
+                $this->generateBannerVariantsSafely($file, $urlImagen);
                 $perfil->foto_fondo = $urlImagen;
             }
 
@@ -347,7 +362,8 @@ class ProfileService
             return [
                 'status' => true,
                 'message' => 'Imagen actualizada correctamente',
-                'url' => $urlImagen
+                'url' => $urlImagen,
+                ...($tipo === 'profile' ? $this->variantResponse($urlImagen) : $this->bannerVariantResponse($urlImagen)),
             ];
 
         } catch (\Exception $e) {
@@ -390,6 +406,11 @@ class ProfileService
             }
 
             if ($urlImagen) {
+                if ($tipo === 'profile') {
+                    $this->imageVariants->deleteVariants($urlImagen);
+                } else {
+                    $this->imageVariants->deleteBannerVariants($urlImagen);
+                }
                 $this->deleteImage($urlImagen);
             }
 
@@ -444,8 +465,19 @@ class ProfileService
             $carpeta = $tipo === 'profile' ? 'profile' : 'banner';
             $urlNueva = $this->uploadImage($file, $carpeta);
 
+            if ($tipo === 'profile') {
+                $this->generateProfileVariantsSafely($file, $urlNueva);
+            } else {
+                $this->generateBannerVariantsSafely($file, $urlNueva);
+            }
+
             if ($urlAnterior) {
                 try {
+                    if ($tipo === 'profile') {
+                        $this->imageVariants->deleteVariants($urlAnterior);
+                    } else {
+                        $this->imageVariants->deleteBannerVariants($urlAnterior);
+                    }
                     $this->deleteImage($urlAnterior);
                 } catch (\Exception $e) {
                     // No detenemos el proceso si falla la eliminación
@@ -465,7 +497,8 @@ class ProfileService
             return [
                 'status' => true,
                 'message' => 'Imagen actualizada correctamente',
-                'url' => $urlNueva
+                'url' => $urlNueva,
+                ...($tipo === 'profile' ? $this->variantResponse($urlNueva) : $this->bannerVariantResponse($urlNueva)),
             ];
 
         } catch (\Exception $e) {
@@ -478,7 +511,50 @@ class ProfileService
             ];
         }
     }
+
+    private function generateProfileVariantsSafely($file, string $originalUrl): void
+    {
+        try {
+            $this->imageVariants->generateFromUploadedFile($file, $originalUrl);
+        } catch (\Throwable $e) {
+            Log::warning('No se pudieron generar variantes de foto de perfil.', [
+                'url' => $originalUrl,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function variantResponse(?string $originalUrl): array
+    {
+        $variants = $this->imageVariants->getVariantUrls($originalUrl);
+
+        return [
+            'foto_perfil_medium_url' => $variants['medium'] ?? null,
+            'foto_perfil_small_url' => $variants['small'] ?? null,
+            'foto_perfil_thumb_url' => $variants['thumb'] ?? null,
+        ];
+    }
+
+    private function generateBannerVariantsSafely($file, string $originalUrl): void
+    {
+        try {
+            $this->imageVariants->generateBannerFromUploadedFile($file, $originalUrl);
+        } catch (\Throwable $e) {
+            Log::warning('No se pudieron generar variantes del banner.', [
+                'url' => $originalUrl,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function bannerVariantResponse(?string $originalUrl): array
+    {
+        $variants = $this->imageVariants->getBannerVariantUrls($originalUrl);
+
+        return [
+            'foto_fondo_medium_url' => $variants['medium'] ?? null,
+            'foto_fondo_small_url' => $variants['small'] ?? null,
+        ];
+    }
 }
-
-
 

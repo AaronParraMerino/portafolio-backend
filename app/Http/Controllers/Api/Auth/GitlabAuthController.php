@@ -11,6 +11,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
+use App\Services\api\ProyectoNotificacionGuardadoService;
+
 class GitlabAuthController extends ProviderOAuthController
 {
     public function __construct(
@@ -18,6 +20,7 @@ class GitlabAuthController extends ProviderOAuthController
         OAuthProviderAuthorizationService $authorizationService,
         SeccionService $seccionService,
         private readonly GitlabRepositorySyncService $gitlabRepositorySyncService,
+         private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
     ) {
         parent::__construct($authService, $authorizationService, $seccionService);
     }
@@ -153,6 +156,24 @@ class GitlabAuthController extends ProviderOAuthController
             $data['repositorios_ids'],
             $data['participacion_data'] ?? [],
         );
+
+        // seccion para notificar
+        if (in_array(($result['status'] ?? null), ['success', 'linked_existing_project'], true)) {
+        $idProyectoNotificacion = (int) (
+            $result['id_proyecto']
+            ?? $result['existing_project_id']
+            ?? $data['id_proyecto']
+        );
+
+        if ($idProyectoNotificacion > 0) {
+            $this->proyectoNotificacionGuardadoService->notificarNuevoParticipante(
+                idProyecto: $idProyectoNotificacion,
+                idUsuarioNuevo: (int) $user->id_usuario,
+                idUsuarioActor: (int) $user->id_usuario
+            );
+        }
+        }
+        // fin seccion para notificar
 
         return match ($result['status'] ?? 'error') {
             'success' => response()->json($result),

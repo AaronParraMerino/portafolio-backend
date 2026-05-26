@@ -16,6 +16,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->trustProxies(at: '*');
         $middleware->statefulApi();
+        $middleware->alias([
+            'account.writable' => \App\Http\Middleware\EnsureAccountIsWritable::class,
+        ]);
 
         // API auth failures must return 401 JSON instead of redirecting to a login route.
         $middleware->redirectGuestsTo(function (Request $request) {

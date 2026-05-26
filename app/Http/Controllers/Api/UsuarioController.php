@@ -65,11 +65,24 @@ class UsuarioController extends Controller
     public function update(Request $request, $id): JsonResponse
     {
         $usuario = $this->usuarioService->findById((int) $id);
+        $authUser = $request->user();
 
         if (! $usuario) {
             return response()->json([
                 'message' => 'Usuario no encontrado'
             ], 404);
+        }
+
+        if (! $authUser || ((int) $authUser->id_usuario !== (int) $usuario->id_usuario && $authUser->rol !== 'admin')) {
+            return response()->json([
+                'message' => 'No tienes permiso para actualizar esta cuenta'
+            ], 403);
+        }
+
+        if ($request->has('estado')) {
+            return response()->json([
+                'message' => 'El estado de cuenta solo puede cambiarse mediante las acciones administrativas correspondientes.'
+            ], 403);
         }
 
         $validator = Validator::make($request->all(), [
@@ -78,8 +91,9 @@ class UsuarioController extends Controller
             'correo' => ['sometimes', 'email', 'max:255', 'unique:usuarios,correo,' . $id . ',id_usuario'],
             'password' => ['sometimes', 'string', 'min:8'],
             'telefono' => ['nullable', 'string', 'max:20'],
-            'rol' => ['sometimes', 'in:admin,usuario,otro'],
-            'estado' => ['sometimes', 'in:activo,bloqueado,inactivo,pausado'],
+            'rol' => $authUser->rol === 'admin'
+                ? ['sometimes', 'in:admin,usuario,otro']
+                : ['prohibited'],
             'idioma_preferido' => ['nullable', 'string', 'max:50'],
         ]);
 
@@ -155,7 +169,7 @@ class UsuarioController extends Controller
         $usuario = $request->user();
 
         if (! Hash::check($request->password_actual, $usuario->password)) {
-            return response()->json(['message' => 'La contraseña actual es incorrecta.'], 401);
+            return response()->json(['message' => 'La contraseña actual es incorrecta.'], 422);
         }
 
         $usuario->password = Hash::make($request->password_nueva);

@@ -8,7 +8,8 @@ use Illuminate\Support\Facades\DB;
 class PortafolioPublicoService
 {
     public function __construct(
-        private readonly PersonalizacionPortafolioService $personalizacionService
+        private readonly PersonalizacionPortafolioService $personalizacionService,
+        private readonly ProfileImageVariantService $profileImageVariants
     ) {
     }
 
@@ -16,7 +17,12 @@ class PortafolioPublicoService
     {
         $usuario = Usuario::with(['perfil', 'visibilidades'])->find($userId);
 
-        if (! $usuario || ! $usuario->perfil || ! $this->toBoolean($usuario->perfil->es_publico, true)) {
+        if (
+            ! $usuario
+            || ! in_array($usuario->estado, ['activo', 'pausado'], true)
+            || ! $usuario->perfil
+            || ! $this->toBoolean($usuario->perfil->es_publico, true)
+        ) {
             return null;
         }
 
@@ -35,6 +41,8 @@ class PortafolioPublicoService
     private function serializePerfil(Usuario $usuario, array $configVisibility = []): array
     {
         $perfil = $usuario->perfil;
+        $fotoVariantes = $this->profileImageVariants->getVariantUrls($perfil?->foto_perfil);
+        $bannerVariantes = $this->profileImageVariants->getBannerVariantUrls($perfil?->foto_fondo);
         $visibilidadRaw = $usuario->visibilidades
             ->pluck('visible', 'campo')
             ->toArray();
@@ -62,7 +70,12 @@ class PortafolioPublicoService
             'ciudad' => $visibilidad['ciudad'] ? $perfil?->ciudad : null,
             'pais' => $visibilidad['pais'] ? $perfil?->pais : null,
             'foto_perfil' => $perfil?->foto_perfil,
+            'foto_perfil_medium_url' => $fotoVariantes['medium'] ?? null,
+            'foto_perfil_small_url' => $fotoVariantes['small'] ?? null,
+            'foto_perfil_thumb_url' => $fotoVariantes['thumb'] ?? null,
             'foto_fondo' => $perfil?->foto_fondo,
+            'foto_fondo_medium_url' => $bannerVariantes['medium'] ?? null,
+            'foto_fondo_small_url' => $bannerVariantes['small'] ?? null,
             'es_publico' => $this->toBoolean($perfil?->es_publico, true),
             'portfolio_publico' => $this->toBoolean($perfil?->es_publico, true),
             'visibilidad' => $visibilidad,
@@ -175,6 +188,11 @@ class PortafolioPublicoService
             ->map(function ($ev) {
                 $arr = (array) $ev;
                 $arr['archivo_url'] = $arr['url'] ?? null;
+                if (in_array(strtolower((string) ($arr['tipo'] ?? '')), ['imagen', 'captura'], true)) {
+                    $variants = $this->profileImageVariants->getProjectVariantUrls($arr['url'] ?? null);
+                    $arr['imagen_card_url'] = $variants['card'] ?? null;
+                    $arr['imagen_detail_url'] = $variants['detail'] ?? null;
+                }
 
                 return $arr;
             })
@@ -230,11 +248,8 @@ class PortafolioPublicoService
             ->filter()
             ->values();
 
-        $participantes = $this->getParticipantesValidados($id);
-        $participantesCount = DB::table('participaciones')
-            ->where('id_proyecto', $id)
-            ->whereNull('deleted_at')
-            ->count();
+        $participantes = $this->getParticipantesPublicos($id);
+        $participantesCount = count($participantes);
 
         return [
             ...$project,
@@ -259,8 +274,12 @@ class PortafolioPublicoService
         ];
     }
 
-    private function getParticipantesValidados(int $projectId): array
+    private function getParticipantesPublicos(int $projectId): array
     {
+        $mostrarSinValidacion = DB::table('proyecto_configuraciones')
+            ->where('id_proyecto', $projectId)
+            ->value('visibilidad_usuario_sin_validacion') !== 'oculto';
+
         $repos = DB::table('proyecto_repositorios as pr')
             ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
             ->where('pr.id_proyecto', $projectId)
@@ -311,15 +330,19 @@ class PortafolioPublicoService
                 ->groupBy('id_usuario');
 
         return $rows
-            ->map(function ($row) use ($validaciones) {
+            ->map(function ($row) use ($validaciones, $mostrarSinValidacion) {
                 $userValidaciones = $validaciones->get($row->id_usuario, collect());
-                $validacion = $userValidaciones->first(fn ($item) => (bool) $item->validado)
+                $validacion = $userValidaciones->first(fn ($item) => $this->toBoolean($item->validado))
                     ?? $userValidaciones->first();
-                $validado = (bool) ($validacion?->validado ?? $row->participacion_validada ?? false);
+                $validado = $this->toBoolean($validacion?->validado ?? $row->participacion_validada ?? false);
 
-                if (! $validado) {
+                if (! $validado && ! $mostrarSinValidacion) {
                     return null;
                 }
+
+                $tipoParticipante = $validado
+                    ? 'usuario_github_validado'
+                    : 'usuario_sin_validacion_github';
 
                 return [
                     'id' => 'participacion-' . $row->id_participacion,
@@ -331,18 +354,19 @@ class PortafolioPublicoService
                     'descripcion_aporte' => $row->descripcion_aporte,
                     'es_propietario' => (bool) $row->es_propietario,
                     'foto_perfil' => $row->foto_perfil,
+                    'avatar_thumb_url' => $this->profileImageVariants->getVariantUrl($row->foto_perfil, 'thumb'),
                     'github_avatar_url' => $row->github_foto_url,
                     'avatar_url' => $row->foto_perfil ?: $row->github_foto_url,
                     'source' => 'sistema',
-                    'tipo_participante' => 'usuario_github_validado',
-                    'origen_participante' => 'usuario_github_validado',
+                    'tipo_participante' => $tipoParticipante,
+                    'origen_participante' => $tipoParticipante,
                     'tiene_cuenta' => true,
                     'tiene_vinculacion_github' => ! is_null($row->id_cuenta_oauth),
-                    'validacion_github' => true,
+                    'validacion_github' => $validado,
                     'github_id' => $row->provider_user_id,
                     'github_username' => $row->github_nombre,
                     'validacion' => [
-                        'validado' => true,
+                        'validado' => $validado,
                         'relacion_github' => $validacion->relacion_github ?? 'unknown',
                         'es_propietario' => (bool) ($validacion->es_propietario ?? false),
                         'ultima_verificacion_at' => $validacion->ultima_verificacion_at ?? null,

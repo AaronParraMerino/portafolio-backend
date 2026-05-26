@@ -39,11 +39,39 @@ class UsuarioService
         return $usuario->fresh();
     }
 
+    public function activate(Usuario $usuario): void
+    {
+        $usuario->update([
+            'estado' => 'activo',
+            'intentos_fallidos' => 0,
+            'fecha_bloqueo' => null,
+        ]);
+    }
+
     public function delete(Usuario $usuario): void
     {
-        DB::transaction(function () use ($usuario) {
+        $this->restrictAccount($usuario, 'inactivo');
+    }
+
+    public function block(Usuario $usuario): void
+    {
+        $this->restrictAccount($usuario, 'bloqueado');
+    }
+
+    public function pause(Usuario $usuario): void
+    {
+        $usuario->update([
+            'estado' => 'pausado',
+            'intentos_fallidos' => 0,
+            'fecha_bloqueo' => null,
+        ]);
+    }
+
+    private function restrictAccount(Usuario $usuario, string $estado): void
+    {
+        DB::transaction(function () use ($usuario, $estado) {
             $usuario->update([
-                'estado' => 'inactivo',
+                'estado' => $estado,
                 'intentos_fallidos' => 0,
                 'fecha_bloqueo' => null,
             ]);
@@ -60,27 +88,14 @@ class UsuarioService
                 ->where('usuario_id', $usuario->id_usuario)
                 ->update(['es_visible' => DB::raw('FALSE')]);
 
+            DB::table('experiencias')
+                ->where('usuario_id', $usuario->id_usuario)
+                ->update(['es_publico' => DB::raw('FALSE')]);
+
             DB::table('participaciones')
                 ->where('id_usuario', $usuario->id_usuario)
                 ->whereNull('deleted_at')
                 ->update(['visibilidad' => 'privado']);
-
-            $proyectosPropios = DB::table('participaciones')
-                ->where('id_usuario', $usuario->id_usuario)
-                ->whereRaw('es_propietario = TRUE')
-                ->pluck('id_proyecto');
-
-            if ($proyectosPropios->isNotEmpty()) {
-                DB::table('proyecto_evidencias')
-                    ->whereIn('id_proyecto', $proyectosPropios)
-                    ->whereNull('deleted_at')
-                    ->update(['es_visible' => DB::raw('FALSE')]);
-
-                DB::table('uso_tecnologias')
-                    ->whereIn('id_proyecto', $proyectosPropios)
-                    ->whereNull('deleted_at')
-                    ->update(['es_visible' => DB::raw('FALSE')]);
-            }
 
             $usuario->tokens()->delete();
         });

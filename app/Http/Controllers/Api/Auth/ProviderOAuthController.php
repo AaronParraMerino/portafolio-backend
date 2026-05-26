@@ -148,7 +148,10 @@ abstract class ProviderOAuthController extends Controller
         }
 
         if ($result['status'] === 'blocked') {
-            return redirect($frontendUrl . '/auth/login?oauth_error=blocked');
+            return redirect($frontendUrl . '/auth/login?' . http_build_query([
+                'oauth_error' => 'blocked',
+                'razon' => $result['razon'] ?? 'Tu cuenta fue bloqueada por administracion.',
+            ]));
         }
 
         if ($result['status'] === 'inactive') {

@@ -5,7 +5,7 @@ use App\Http\Controllers\Api\ProfileController;
 //para hacerlo sin autenticacion: 
 //Route::prefix('profile')->group(function () {
 
-Route::prefix('profile')->middleware('auth:sanctum')->group(function () {
+Route::prefix('profile')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
 
     Route::get('{userId}', [ProfileController::class, 'show']);
 

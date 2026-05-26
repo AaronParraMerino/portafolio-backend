@@ -7,6 +7,7 @@ use App\Models\ParticipacionRepositorio;
 use App\Models\ProyectoRepositorio;
 use App\Models\RepositorioGithub;
 use App\Models\UsuarioRepositorioValidacion;
+use App\Services\api\Auth\GitlabOAuthService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
@@ -14,6 +15,10 @@ class GitlabRepositorySyncService
 {
     private const MAX_DETAILED_REPOS_PER_SYNC = 0;
     private const MAX_PROJECT_PAGES_PER_SYNC = 3;
+
+    public function __construct(private readonly GitlabOAuthService $gitlabOAuthService)
+    {
+    }
 
     public function syncForUsuario(int $usuarioId): array
     {
@@ -28,14 +33,23 @@ class GitlabRepositorySyncService
             ];
         }
 
-        if (! $cuentaGitlab->access_token) {
-            return [
-                'status' => 'missing_token',
-                'message' => 'La cuenta vinculada no tiene token de sincronizacion.',
-            ];
+        $token = $this->usableAccessToken($cuentaGitlab);
+
+        if (($token['status'] ?? 'error') !== 'success') {
+            return $token;
         }
 
-        $projectsResponse = $this->fetchAllGitlabProjects($cuentaGitlab->access_token);
+        $projectsResponse = $this->fetchAllGitlabProjects($token['access_token']);
+
+        if (($projectsResponse['status'] ?? null) === 'invalid_token' && ! ($token['refreshed'] ?? false)) {
+            $token = $this->refreshAccessToken($cuentaGitlab, $token['access_token']);
+
+            if (($token['status'] ?? 'error') !== 'success') {
+                return $token;
+            }
+
+            $projectsResponse = $this->fetchAllGitlabProjects($token['access_token']);
+        }
 
         if (($projectsResponse['status'] ?? 'error') !== 'success') {
             return $projectsResponse;
@@ -107,7 +121,7 @@ class GitlabRepositorySyncService
             $remoteRepo->repo_updated_at = $project['last_activity_at'] ?? null;
 
             if ($shouldRefreshDetails && $detailsUpdated < self::MAX_DETAILED_REPOS_PER_SYNC) {
-                $this->fillGitlabRepoDetails($remoteRepo, $project, $cuentaGitlab->access_token);
+                $this->fillGitlabRepoDetails($remoteRepo, $project, $token['access_token']);
                 $detailsUpdated++;
             } elseif ($shouldRefreshDetails) {
                 $detailsSkipped++;
@@ -177,20 +191,37 @@ class GitlabRepositorySyncService
             ->where('provider', 'gitlab')
             ->first();
 
-        if (! $cuentaGitlab?->access_token) {
+        if (! $cuentaGitlab) {
             return [
                 'status' => 'not_linked',
                 'message' => 'Necesita vincular GitLab para consultar este repositorio.',
             ];
         }
 
-        $response = $this->gitlabRequest($cuentaGitlab->access_token)
+        $token = $this->usableAccessToken($cuentaGitlab);
+
+        if (($token['status'] ?? 'error') !== 'success') {
+            return $token;
+        }
+
+        $response = $this->gitlabRequest($token['access_token'])
             ->get('https://gitlab.com/api/v4/projects/' . rawurlencode($project['path']) . '/languages');
+
+        if ($response->status() === 401 && ! ($token['refreshed'] ?? false)) {
+            $token = $this->refreshAccessToken($cuentaGitlab, $token['access_token']);
+
+            if (($token['status'] ?? 'error') !== 'success') {
+                return $token;
+            }
+
+            $response = $this->gitlabRequest($token['access_token'])
+                ->get('https://gitlab.com/api/v4/projects/' . rawurlencode($project['path']) . '/languages');
+        }
 
         if ($response->status() === 401) {
             return [
                 'status' => 'invalid_token',
-                'message' => 'Token GitLab invalido o expirado, vuelve a vincular la cuenta.',
+                'message' => 'La vinculacion GitLab no es valida. Vuelve a vincular la cuenta.',
             ];
         }
 
@@ -513,7 +544,7 @@ class GitlabRepositorySyncService
             if ($response->status() === 401) {
                 return [
                     'status' => 'invalid_token',
-                    'message' => 'Token GitLab invalido o expirado, vuelve a vincular la cuenta.',
+                    'message' => 'La vinculacion GitLab no es valida. Vuelve a vincular la cuenta.',
                 ];
             }
 
@@ -545,6 +576,40 @@ class GitlabRepositorySyncService
         return [
             'status' => 'success',
             'repos' => $projects,
+        ];
+    }
+
+    private function usableAccessToken(CuentaOauth $cuentaGitlab): array
+    {
+        if (! $cuentaGitlab->access_token) {
+            return [
+                'status' => 'missing_token',
+                'message' => 'La cuenta vinculada no tiene token de sincronizacion.',
+            ];
+        }
+
+        if ($cuentaGitlab->token_expires_at && $cuentaGitlab->token_expires_at->lte(now()->addMinute())) {
+            return $this->refreshAccessToken($cuentaGitlab, $cuentaGitlab->access_token);
+        }
+
+        return [
+            'status' => 'success',
+            'access_token' => $cuentaGitlab->access_token,
+            'refreshed' => false,
+        ];
+    }
+
+    private function refreshAccessToken(CuentaOauth $cuentaGitlab, ?string $staleAccessToken = null): array
+    {
+        $result = $this->gitlabOAuthService->refreshAccessToken($cuentaGitlab, $staleAccessToken);
+
+        if (($result['status'] ?? 'error') !== 'success') {
+            return $result;
+        }
+
+        return [
+            ...$result,
+            'refreshed' => true,
         ];
     }
 

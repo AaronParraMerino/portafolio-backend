@@ -66,7 +66,11 @@ class AuthController extends Controller
         }
 
         if ($result['status'] === 'blocked') {
-            return response()->json(['message' => 'Usuario bloqueado'], 403);
+            return response()->json([
+                'status' => 'blocked_account',
+                'message' => 'Esta cuenta ha sido bloqueada.',
+                'razon' => $result['razon'] ?? 'Tu cuenta fue bloqueada por administracion.',
+            ], 403);
         }
 
         if ($result['status'] === 'inactive') {
@@ -105,7 +109,7 @@ class AuthController extends Controller
 
     public function me(Request $request): JsonResponse
     {
-        return response()->json(['data' => $request->user()]);
+        return response()->json(['data' => $this->authService->decorateAccountState($request->user())]);
     }
 
     public function linkedProviders(Request $request): JsonResponse
@@ -149,7 +153,11 @@ class AuthController extends Controller
         }
 
         if ($result['status'] === 'blocked') {
-            return response()->json(['message' => 'Usuario bloqueado'], 403);
+            return response()->json([
+                'status' => 'blocked_account',
+                'message' => 'Esta cuenta ha sido bloqueada.',
+                'razon' => $result['razon'] ?? 'Tu cuenta fue bloqueada por administracion.',
+            ], 403);
         }
 
         if ($result['status'] === 'wrong_credentials') {

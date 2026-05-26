@@ -3,7 +3,7 @@
 use App\Http\Controllers\Api\Auth\DiscordAuthController;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'account.writable'])->group(function () {
     Route::post('/discord/connect-url', [DiscordAuthController::class, 'connectUrl']);
 
     Route::delete('/discord/unlink', [DiscordAuthController::class, 'unlink']);
