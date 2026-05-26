@@ -126,26 +126,18 @@ class ProyectoController extends Controller
         }
 
         $payload = $request->validate([
-            'modo_union' => 'sometimes|in:cerrado,por_solicitud,enlace_autenticado,github_validado',
-            'requiere_aprobacion_union' => 'sometimes|boolean',
             'permitir_participantes_sin_validacion' => 'sometimes|boolean',
             'puede_editar_proyecto' => 'sometimes|in:propietarios,autoridad_github,participantes_validados,participantes',
             'puede_administrar_proyecto' => 'sometimes|in:propietarios,autoridad_github',
             'github_nivel_autoridad' => 'sometimes|in:owner,maintainer,admin_push',
             'github_prevalece_sobre_creador' => 'sometimes|boolean',
-            'enlace_union_activo' => 'sometimes|boolean',
-            'visibilidad_github_validado_externo' => 'sometimes|in:oculto,visible',
-            'visibilidad_github_validado_usuario' => 'sometimes|in:visible,oculto',
             'visibilidad_usuario_sin_validacion' => 'sometimes|in:oculto,visible',
             'permitir_remover_participantes_sin_validacion' => 'sometimes|boolean',
         ]);
 
-        unset($payload['enlace_union_token'], $payload['enlace_union_expira_at']);
         foreach ([
-            'requiere_aprobacion_union',
             'permitir_participantes_sin_validacion',
             'github_prevalece_sobre_creador',
-            'enlace_union_activo',
             'permitir_remover_participantes_sin_validacion',
         ] as $booleanField) {
             if (array_key_exists($booleanField, $payload)) {
@@ -915,18 +907,11 @@ class ProyectoController extends Controller
     private function defaultProjectConfiguration(): array
     {
         return [
-            'modo_union' => 'github_validado',
-            'requiere_aprobacion_union' => true,
             'permitir_participantes_sin_validacion' => false,
             'puede_editar_proyecto' => 'participantes_validados',
             'puede_administrar_proyecto' => 'propietarios',
             'github_nivel_autoridad' => 'maintainer',
             'github_prevalece_sobre_creador' => true,
-            'enlace_union_activo' => false,
-            'enlace_union_token' => null,
-            'enlace_union_expira_at' => null,
-            'visibilidad_github_validado_externo' => 'visible',
-            'visibilidad_github_validado_usuario' => 'visible',
             'visibilidad_usuario_sin_validacion' => 'visible',
             'permitir_remover_participantes_sin_validacion' => false,
         ];
@@ -957,10 +942,8 @@ class ProyectoController extends Controller
         ];
 
         foreach ([
-            'requiere_aprobacion_union',
             'permitir_participantes_sin_validacion',
             'github_prevalece_sobre_creador',
-            'enlace_union_activo',
             'permitir_remover_participantes_sin_validacion',
         ] as $key) {
             $config[$key] = $this->truthy($config[$key] ?? false);
