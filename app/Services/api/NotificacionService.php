@@ -3,9 +3,57 @@
 namespace App\Services\api;
 
 use App\Models\Notificacion;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class NotificacionService
 {
+    public function createAdminNotice(int $idUsuarioActor, array $data): array
+    {
+        $destinatarios = collect($data['destinatarios'])
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+        $envioId = (string) Str::uuid();
+        $canales = $data['canales'] ?? ['inapp'];
+
+        DB::transaction(function () use ($data, $destinatarios, $envioId, $idUsuarioActor, $canales): void {
+            foreach ($destinatarios as $idUsuarioDestino) {
+                Notificacion::create([
+                    'id_usuario_destino' => $idUsuarioDestino,
+                    'id_usuario_actor' => $idUsuarioActor,
+                    'tipo' => 'admin_notice_' . $data['tipo'],
+                    'modulo' => 'administracion',
+                    'titulo' => $data['titulo'],
+                    'contenido' => $data['contenido'],
+                    'data' => [
+                        'envio_id' => $envioId,
+                        'tipo_aviso' => $data['tipo'],
+                        'urgencia' => $data['urgencia'],
+                        'canales' => $canales,
+                        'segmentos' => $data['segmentos'] ?? [],
+                    ],
+                ]);
+            }
+        });
+
+        return [
+            'status' => 'success',
+            'message' => 'Aviso enviado correctamente.',
+            'data' => [
+                'id_envio' => $envioId,
+                'titulo' => $data['titulo'],
+                'contenido' => $data['contenido'],
+                'tipo' => $data['tipo'],
+                'urgencia' => $data['urgencia'],
+                'canales' => $canales,
+                'segmentos' => $data['segmentos'] ?? [],
+                'destinatarios' => $destinatarios->count(),
+                'created_at' => now()->toISOString(),
+            ],
+        ];
+    }
+
     // Obtiene las notificaciones de un usuario
     public function getUserNotifications(int $idUsuario, array $filtros = []): array
     {

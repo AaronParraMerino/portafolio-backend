@@ -3,18 +3,25 @@
 namespace App\Http\Controllers\Api\Administrador;
 
 use App\Http\Controllers\Controller;
+use App\Models\Notificacion;
 use App\Models\SesionBase;
 use App\Models\Usuario;
 use App\Services\api\SeccionService;
+use App\Services\api\NotificacionService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
+use Throwable;
 
 class UsuarioController extends Controller
 {
     public function __construct(
         private readonly SeccionService $seccionService,
-        private readonly UsuarioService $usuarioService
+        private readonly UsuarioService $usuarioService,
+        private readonly NotificacionService $notificacionService
     ) {
     }
 
@@ -56,8 +63,36 @@ class UsuarioController extends Controller
             ];
         })->values();
 
+        $communications = Notificacion::query()
+            ->where('modulo', 'administracion')
+            ->where('tipo', 'like', 'admin_notice_%')
+            ->orderByDesc('created_at')
+            ->limit(1000)
+            ->get()
+            ->groupBy(fn (Notificacion $notice) => $notice->data['envio_id'] ?? (string) $notice->id_notificacion)
+            ->map(function ($notices): array {
+                /** @var Notificacion $notice */
+                $notice = $notices->first();
+                $data = $notice->data ?? [];
+
+                return [
+                    'id' => $data['envio_id'] ?? $notice->id_notificacion,
+                    'titulo' => $notice->titulo,
+                    'cuerpo' => $notice->contenido,
+                    'tipo' => $data['tipo_aviso'] ?? 'sistema',
+                    'estado' => 'enviado',
+                    'urgencia' => $data['urgencia'] ?? 'baja',
+                    'destinatarios' => $notices->count(),
+                    'creado' => $notice->created_at?->format('d/m/Y H:i'),
+                    'segmentos' => $data['segmentos'] ?? [],
+                    'canales' => $data['canales'] ?? ['inapp'],
+                ];
+            })
+            ->values();
+
         return response()->json([
             'items' => $items,
+            'communications' => $communications,
             'metrics' => [
                 'total' => $usuarios->count(),
                 'activo' => $usuarios->where('estado', 'activo')->count(),
@@ -69,6 +104,7 @@ class UsuarioController extends Controller
             'supportsMutations' => false,
             'supportsSessions' => false,
             'supportsInactivation' => true,
+            'supportsCommunications' => true,
         ]);
     }
 
@@ -88,15 +124,104 @@ class UsuarioController extends Controller
             return response()->json(['message' => 'La cuenta ya se encuentra inactiva.'], 422);
         }
 
+        $data = $request->validate([
+            'razon' => ['nullable', 'string', 'max:1000'],
+            'canales' => ['sometimes', 'array', 'min:1'],
+            'canales.*' => ['required', 'distinct', Rule::in(['inapp', 'email'])],
+        ]);
+        $razon = trim((string) ($data['razon'] ?? ''))
+            ?: 'Tu cuenta fue inactivada por administracion de acuerdo con las politicas de la plataforma.';
+        $canales = $data['canales'] ?? ['inapp', 'email'];
+        $canalesEnviados = [];
+        $canalesFallidos = [];
+
         $this->usuarioService->delete($usuario);
 
+        if (in_array('inapp', $canales, true)) {
+            $this->notificacionService->createAdminNotice(
+                (int) $request->user()->id_usuario,
+                [
+                    'destinatarios' => [$usuario->id_usuario],
+                    'titulo' => 'Cuenta inactivada',
+                    'contenido' => $razon,
+                    'tipo' => 'cuenta',
+                    'urgencia' => 'alta',
+                    'canales' => $canales,
+                    'segmentos' => ['seleccionados'],
+                ]
+            );
+            $canalesEnviados[] = 'inapp';
+        }
+
+        if (in_array('email', $canales, true)) {
+            try {
+                $this->sendInactivationNoticeWithSendGridApi(
+                    $usuario->correo,
+                    trim($usuario->nombre.' '.$usuario->apellido),
+                    $razon
+                );
+                $canalesEnviados[] = 'email';
+            } catch (Throwable $exception) {
+                $canalesFallidos[] = 'email';
+                Log::warning('No se pudo enviar el correo de inactivacion de cuenta.', [
+                    'id_usuario' => $usuario->id_usuario,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
         return response()->json([
-            'message' => 'Cuenta inactivada correctamente.',
+            'message' => empty($canalesFallidos)
+                ? 'Cuenta inactivada y aviso enviado correctamente.'
+                : 'Cuenta inactivada. No fue posible enviar todos los avisos.',
             'data' => [
                 'id' => $usuario->id_usuario,
                 'estado' => 'inactivo',
+                'razon' => $razon,
+                'canales_enviados' => $canalesEnviados,
+                'canales_fallidos' => $canalesFallidos,
             ],
         ]);
+    }
+
+    private function sendInactivationNoticeWithSendGridApi(string $toEmail, string $nombre, string $razon): void
+    {
+        $apiKey = (string) env('SENDGRID_API_KEY', '');
+        $fromEmail = (string) env('SENDGRID_FROM_ADDRESS', env('MAIL_FROM_ADDRESS', ''));
+        $fromName = (string) env('SENDGRID_FROM_NAME', env('MAIL_FROM_NAME', 'Portafolio'));
+        $apiUrl = (string) env('SENDGRID_API_URL', 'https://api.sendgrid.com/v3/mail/send');
+
+        if ($apiKey === '' || $fromEmail === '') {
+            throw new \RuntimeException('Falta SENDGRID_API_KEY o SENDGRID_FROM_ADDRESS en .env');
+        }
+
+        $html = view('emails.cuenta_inactivada', [
+            'nombre' => $nombre,
+            'razon' => $razon,
+        ])->render();
+
+        $response = Http::withToken($apiKey)
+            ->acceptJson()
+            ->post($apiUrl, [
+                'personalizations' => [[
+                    'to' => [[
+                        'email' => $toEmail,
+                    ]],
+                ]],
+                'from' => [
+                    'email' => $fromEmail,
+                    'name' => $fromName,
+                ],
+                'subject' => 'Tu cuenta ha sido inactivada',
+                'content' => [[
+                    'type' => 'text/html',
+                    'value' => $html,
+                ]],
+            ]);
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('SendGrid API error '.$response->status().': '.$response->body());
+        }
     }
 
     public function sessions(Request $request, int $id): JsonResponse

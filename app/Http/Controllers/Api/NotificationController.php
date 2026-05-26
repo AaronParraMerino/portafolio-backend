@@ -18,11 +18,9 @@ class NotificationController extends Controller
     // Obtiene las notificaciones de un usuario
     public function index(Request $request, int $userId)
     {
-       /* $user = auth()->user();
-
-        if ($user->id_usuario != $userId) {
-            return response()->json(['message' => 'No autorizado'], 403);
-        }*/
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
 
         $filtros = $request->only([
             'por_pagina',
@@ -37,13 +35,11 @@ class NotificationController extends Controller
     }
 
     // Marca una notificacion como leida
-    public function markAsRead(int $userId, int $notificationId)
+    public function markAsRead(Request $request, int $userId, int $notificationId)
     {
-       /* $user = auth()->user();
-
-        if ($user->id_usuario != $userId) {
-            return response()->json(['message' => 'No autorizado'], 403);
-        }*/
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
 
         $response = $this->service->markNotificationAsRead($userId, $notificationId);
 
@@ -56,11 +52,9 @@ class NotificationController extends Controller
     // Marca varias notificaciones como leidas
     public function markManyAsRead(Request $request, int $userId)
     {
-        /*$user = auth()->user();
-
-        if ($user->id_usuario != $userId) {
-            return response()->json(['message' => 'No autorizado'], 403);
-        }*/
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
 
         $request->validate([
             'ids_notificaciones' => 'required|array',
@@ -79,13 +73,11 @@ class NotificationController extends Controller
     }
 
     // Marca todas las notificaciones como leidas
-    public function markAllAsRead(int $userId)
+    public function markAllAsRead(Request $request, int $userId)
     {
-        /*$user = auth()->user();
-
-        if ($user->id_usuario != $userId) {
-            return response()->json(['message' => 'No autorizado'], 403);
-        }*/
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
 
         $response = $this->service->markAllNotificationsAsRead($userId);
 
@@ -96,18 +88,25 @@ class NotificationController extends Controller
     }
 
     // Cuenta las notificaciones pendientes de un usuario
-    public function countUnread(int $userId)
+    public function countUnread(Request $request, int $userId)
     {
-        /*$user = auth()->user();
-
-        if ($user->id_usuario != $userId) {
-            return response()->json(['message' => 'No autorizado'], 403);
-        }*/
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
 
         return response()->json([
             'status' => 'success',
             'pendientes' => $this->service->countUnreadNotifications($userId),
         ]);
+    }
+
+    private function rejectOtherUser(Request $request, int $userId)
+    {
+        if ((int) $request->user()?->id_usuario === $userId) {
+            return null;
+        }
+
+        return response()->json(['message' => 'No autorizado'], 403);
     }
 
     // Obtiene el codigo HTTP segun la respuesta del servicio

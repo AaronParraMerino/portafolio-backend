@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Administrador\UsuarioController;
+use App\Http\Controllers\Api\Administrador\NotificacionController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('administrador')->middleware('auth:sanctum')->group(function () {
@@ -11,4 +12,5 @@ Route::prefix('administrador')->middleware('auth:sanctum')->group(function () {
     Route::delete('/usuarios/{id}/sesiones/{sessionId}', [UsuarioController::class, 'closeSession'])
         ->whereNumber('id')
         ->whereNumber('sessionId');
+    Route::post('/notificaciones', [NotificacionController::class, 'store']);
 });
