@@ -8,6 +8,11 @@ use Illuminate\Support\Str;
 
 class NotificacionService
 {
+    public function __construct(
+        private readonly CalendarioNotificacionGuardadoService $calendarioNotificacionGuardadoService
+    ) {
+    }
+    
     public function createAdminNotice(int $idUsuarioActor, array $data): array
     {
         $destinatarios = collect($data['destinatarios'])
@@ -57,6 +62,9 @@ class NotificacionService
     // Obtiene las notificaciones de un usuario
     public function getUserNotifications(int $idUsuario, array $filtros = []): array
     {
+    // Genera notificaciones de calendario del día antes de listar
+    $this->calendarioNotificacionGuardadoService->notificarEventosDelDia($idUsuario);
+    
         $porPagina = (int) ($filtros['por_pagina'] ?? 15);
         $porPagina = max(1, min($porPagina, 50));
 
