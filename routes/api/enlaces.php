@@ -6,7 +6,7 @@ use App\Http\Controllers\Api\EnlaceController;
 //para hacerlo sin autenticacion: 
 //Route::prefix('enlaces')->group(function () {
 
-Route::prefix('enlaces')->middleware('auth:sanctum')->group(function () {
+Route::prefix('enlaces')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
 
     Route::get('{userId}', [EnlaceController::class, 'index']);
 

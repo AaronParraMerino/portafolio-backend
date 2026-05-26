@@ -3,7 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\HabilidadController;
 
-Route::prefix('habilidades')->middleware('auth:sanctum')->group(function () {
+Route::prefix('habilidades')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
     Route::get('/catalogo', [HabilidadController::class, 'catalog']);
     Route::post('/catalogo', [HabilidadController::class, 'storeCatalog']);
 

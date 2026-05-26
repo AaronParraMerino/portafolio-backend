@@ -3,7 +3,7 @@
 use App\Http\Controllers\Api\Auth\GithubAuthController;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'account.writable'])->group(function () {
     Route::post('/github/connect-url', [GithubAuthController::class, 'connectUrl']);
 
     Route::delete('/github/unlink', [GithubAuthController::class, 'unlink']);

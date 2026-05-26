@@ -70,6 +70,29 @@ class InactiveAccountVisibilityTest extends TestCase
         $this->assertNull($this->publicPortfolioService()->getByUser($userId));
     }
 
+    public function test_pause_preserves_visibility_and_active_sessions(): void
+    {
+        $userId = $this->createUser('activo');
+
+        DB::table('visibilidad_campos')->insert(['usuario_id' => $userId, 'campo' => 'correo', 'visible' => true]);
+        DB::table('enlaces')->insert(['id_usuario' => $userId, 'es_visible' => true]);
+        DB::table('habilidades_usuario')->insert(['usuario_id' => $userId, 'es_visible' => true]);
+        DB::table('experiencias')->insert(['usuario_id' => $userId, 'es_publico' => true]);
+        DB::table('personal_access_tokens')->insert([
+            'tokenable_type' => Usuario::class,
+            'tokenable_id' => $userId,
+        ]);
+
+        (new UsuarioService())->pause(Usuario::findOrFail($userId));
+
+        $this->assertDatabaseHas('usuarios', ['id_usuario' => $userId, 'estado' => 'pausado']);
+        $this->assertDatabaseHas('visibilidad_campos', ['usuario_id' => $userId, 'visible' => true]);
+        $this->assertDatabaseHas('enlaces', ['id_usuario' => $userId, 'es_visible' => true]);
+        $this->assertDatabaseHas('habilidades_usuario', ['usuario_id' => $userId, 'es_visible' => true]);
+        $this->assertDatabaseHas('experiencias', ['usuario_id' => $userId, 'es_publico' => true]);
+        $this->assertDatabaseHas('personal_access_tokens', ['tokenable_id' => $userId]);
+    }
+
     public function test_public_project_includes_unvalidated_participants_when_configured_visible(): void
     {
         $userId = $this->createUser('activo');

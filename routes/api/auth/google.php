@@ -5,7 +5,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/google', [GoogleAuthController::class, 'login']);
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'account.writable'])->group(function () {
     Route::post('/google/connect-url', [GoogleAuthController::class, 'connectUrl']);
     Route::delete('/google/unlink', [GoogleAuthController::class, 'unlink']);
 });

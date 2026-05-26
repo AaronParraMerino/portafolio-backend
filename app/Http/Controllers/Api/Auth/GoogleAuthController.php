@@ -35,7 +35,11 @@ class GoogleAuthController extends ProviderOAuthController
         }
 
         if ($result['status'] === 'blocked') {
-            return response()->json(['message' => 'Usuario bloqueado'], 403);
+            return response()->json([
+                'status' => 'blocked_account',
+                'message' => 'Esta cuenta ha sido bloqueada.',
+                'razon' => $result['razon'] ?? 'Tu cuenta fue bloqueada por administracion.',
+            ], 403);
         }
 
         if ($result['status'] === 'inactive') {

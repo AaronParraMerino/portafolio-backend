@@ -57,9 +57,7 @@ class AuthService
         }
 
         if ($usuario->estado === 'bloqueado') {
-            return [
-                'status' => 'blocked',
-            ];
+            return $this->blockedAccountResult($usuario);
         }
 
         if ($usuario->estado === 'inactivo') {
@@ -69,17 +67,11 @@ class AuthService
             ];
         }
 
-        if ($usuario->estado === 'pausado') {
-            return [
-                'status' => 'paused',
-            ];
-        }
-
         $newToken = $usuario->createToken('auth_token');
 
         return [
             'status' => 'success',
-            'usuario' => $usuario,
+            'usuario' => $this->decorateAccountState($usuario),
             'token' => $newToken->plainTextToken,
             'personal_access_token_id' => $newToken->accessToken->id,
         ];
@@ -156,6 +148,10 @@ class AuthService
 
             $usuario = $cuenta->usuario;
 
+            if ($usuario->estado === 'bloqueado') {
+                return $this->blockedAccountResult($usuario);
+            }
+
             if ($usuario->estado === 'inactivo') {
                 return ['status' => 'inactive', 'correo' => $usuario->correo];
             }
@@ -165,8 +161,16 @@ class AuthService
             $usuario = $usuarioByEmail;
 
             if ($usuario) {
+                if ($usuario->estado === 'bloqueado') {
+                    return $this->blockedAccountResult($usuario);
+                }
+
                 if ($usuario->estado === 'inactivo') {
                     return ['status' => 'inactive', 'correo' => $usuario->correo];
+                }
+
+                if ($usuario->estado === 'pausado') {
+                    return ['status' => 'paused'];
                 }
 
                 $existingProviderLink = CuentaOauth::where('usuario_id', $usuario->id_usuario)
@@ -223,15 +227,11 @@ class AuthService
     }
 
     if ($usuario->estado === 'bloqueado') {
-        return ['status' => 'blocked'];
+        return $this->blockedAccountResult($usuario);
     }
 
     if ($usuario->estado === 'inactivo') {
         return ['status' => 'inactive', 'correo' => $usuario->correo];
-    }
-
-    if ($usuario->estado === 'pausado') {
-        return ['status' => 'paused'];
     }
 
     $newToken = $usuario->createToken('auth_token');
@@ -240,7 +240,7 @@ class AuthService
         'status'                   => 'success',
         'token'                    => $newToken->plainTextToken,
         'personal_access_token_id' => $newToken->accessToken->id,
-        'usuario'                  => $usuario,
+        'usuario'                  => $this->decorateAccountState($usuario),
         'foto_url'                 => $fotoUrl,
     ];
 }
@@ -260,10 +260,14 @@ public function confirmOAuthLink(string $linkToken, ?string $password = null, ?s
     }
 
     if ($usuario->estado === 'bloqueado') {
-        return ['status' => 'blocked'];
+        return $this->blockedAccountResult($usuario);
     }
 
     // Verificar credencial según método
+    if ($usuario->estado === 'pausado') {
+        return ['status' => 'paused'];
+    }
+
     $method = $data['verification_method'] ?? 'password';
 
     if ($method === 'password') {
@@ -356,7 +360,7 @@ public function linkOAuthAccountToUser(int $usuarioId, string $provider, string 
     }
 
     if ($usuario->estado === 'bloqueado') {
-        return ['status' => 'blocked'];
+        return $this->blockedAccountResult($usuario);
     }
 
     $identity = $this->resolveOAuthIdentityByCode($provider, $code);
@@ -449,6 +453,43 @@ private function resolveOAuthIdentityByCode(string $provider, string $code): arr
         default => ['status' => 'invalid'],
     };
 }
+
+private function blockedAccountResult(Usuario $usuario): array
+{
+    $razon = $usuario->notificaciones()
+        ->where('modulo', 'administracion')
+        ->where('tipo', 'admin_notice_seguridad')
+        ->where('titulo', 'Cuenta bloqueada')
+        ->latest('created_at')
+        ->value('contenido');
+
+    return [
+        'status' => 'blocked',
+        'razon' => $razon ?: 'Tu cuenta fue bloqueada por administracion.',
+    ];
+}
+
+public function decorateAccountState(Usuario $usuario): Usuario
+{
+    if ($usuario->estado !== 'pausado') {
+        return $usuario;
+    }
+
+    $razon = $usuario->notificaciones()
+        ->where('modulo', 'administracion')
+        ->where('tipo', 'admin_notice_cuenta')
+        ->where('titulo', 'Cuenta en pausa')
+        ->latest('created_at')
+        ->value('contenido');
+
+    $usuario->setAttribute(
+        'razon_pausa',
+        $razon ?: 'Tu cuenta esta en pausa. Actualmente solo puedes consultar tu informacion.'
+    );
+
+    return $usuario;
+}
+
 private function buildOauthAccountPayload(
     string $provider,
     string $email,

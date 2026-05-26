@@ -3,7 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\ProyectoController;
 
-Route::prefix('projects')->middleware('auth:sanctum')->group(function () {
+Route::prefix('projects')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
     Route::get('/usuario/{userId}', [ProyectoController::class, 'indexByUsuario']);
     Route::get('/{id}/participants', [ProyectoController::class, 'participants']);
     Route::get('/{id}/participantes', [ProyectoController::class, 'participants']);

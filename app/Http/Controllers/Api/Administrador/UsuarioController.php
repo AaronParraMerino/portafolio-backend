@@ -8,6 +8,7 @@ use App\Models\SesionBase;
 use App\Models\Usuario;
 use App\Services\api\SeccionService;
 use App\Services\api\NotificacionService;
+use App\Services\api\ProfileImageVariantService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,7 +22,8 @@ class UsuarioController extends Controller
     public function __construct(
         private readonly SeccionService $seccionService,
         private readonly UsuarioService $usuarioService,
-        private readonly NotificacionService $notificacionService
+        private readonly NotificacionService $notificacionService,
+        private readonly ?ProfileImageVariantService $profileImageVariants = null
     ) {
     }
 
@@ -32,6 +34,7 @@ class UsuarioController extends Controller
         }
 
         $usuarios = Usuario::query()
+            ->with('perfil:id_perfil,usuario_id,foto_perfil')
             ->select([
                 'id_usuario',
                 'nombre',
@@ -51,15 +54,45 @@ class UsuarioController extends Controller
             ->groupBy('usuario_id')
             ->pluck('total', 'usuario_id');
 
-        $items = $usuarios->map(function (Usuario $usuario) use ($sessionCounts): array {
+        $lastSessions = SesionBase::query()
+            ->whereIn('usuario_id', $usuarios->pluck('id_usuario'))
+            ->orderByDesc('ultima_actividad')
+            ->get([
+                'usuario_id',
+                'ultima_actividad',
+                'ip_address',
+                'pais_codigo',
+                'navegador_nombre',
+                'sistema_operativo',
+                'es_movil',
+            ])
+            ->unique('usuario_id')
+            ->keyBy('usuario_id');
+        $imageVariants = $this->profileImageVariants ?? app(ProfileImageVariantService::class);
+
+        $items = $usuarios->map(function (Usuario $usuario) use ($sessionCounts, $lastSessions, $imageVariants): array {
+            /** @var SesionBase|null $lastSession */
+            $lastSession = $lastSessions->get($usuario->id_usuario);
+
             return [
                 'id' => $usuario->id_usuario,
                 'nombre' => trim($usuario->nombre.' '.$usuario->apellido),
                 'email' => $usuario->correo,
                 'rol' => $usuario->rol,
                 'estado' => $usuario->estado,
+                'fotoPerfilThumbUrl' => $imageVariants->getVariantUrl($usuario->perfil?->foto_perfil, 'thumb')
+                    ?? $usuario->perfil?->foto_perfil,
                 'fechaRegistro' => $usuario->created_at?->format('d/m/Y'),
                 'sesionesActivas' => (int) ($sessionCounts[$usuario->id_usuario] ?? 0),
+                'ultimoAcceso' => $lastSession?->ultima_actividad?->format('d/m/Y H:i'),
+                'ultimaSesion' => $lastSession ? [
+                    'ip_address' => $lastSession->ip_address,
+                    'pais_codigo' => $lastSession->pais_codigo,
+                    'navegador_nombre' => $lastSession->navegador_nombre,
+                    'sistema_operativo' => $lastSession->sistema_operativo,
+                    'es_movil' => (bool) $lastSession->es_movil,
+                    'ultima_actividad' => $lastSession->ultima_actividad?->toISOString(),
+                ] : null,
             ];
         })->values();
 
@@ -103,8 +136,85 @@ class UsuarioController extends Controller
             'sourceReady' => true,
             'supportsMutations' => false,
             'supportsSessions' => false,
+            'supportsActivation' => true,
+            'supportsPausing' => true,
+            'supportsBlocking' => true,
             'supportsInactivation' => true,
             'supportsCommunications' => true,
+        ]);
+    }
+
+    public function activate(Request $request, int $id): JsonResponse
+    {
+        if ($forbidden = $this->forbidNonAdmin($request)) {
+            return $forbidden;
+        }
+
+        $usuario = $this->usuarioService->findById($id);
+
+        if (! $usuario) {
+            return response()->json(['message' => 'Usuario no encontrado.'], 404);
+        }
+
+        if ($usuario->estado === 'activo') {
+            return response()->json(['message' => 'La cuenta ya se encuentra activa.'], 422);
+        }
+
+        [$mensaje, $canales] = $this->validateNoticeOptions(
+            $request,
+            'Tu cuenta fue activada por administracion. Ya puedes iniciar sesion nuevamente.'
+        );
+        $canalesEnviados = [];
+        $canalesFallidos = [];
+
+        $this->usuarioService->activate($usuario);
+
+        if (in_array('inapp', $canales, true)) {
+            $this->notificacionService->createAdminNotice(
+                (int) $request->user()->id_usuario,
+                [
+                    'destinatarios' => [$usuario->id_usuario],
+                    'titulo' => 'Cuenta activada',
+                    'contenido' => $mensaje,
+                    'tipo' => 'cuenta',
+                    'urgencia' => 'media',
+                    'canales' => $canales,
+                    'segmentos' => ['seleccionados'],
+                ]
+            );
+            $canalesEnviados[] = 'inapp';
+        }
+
+        if (in_array('email', $canales, true)) {
+            try {
+                $this->sendAccountNoticeWithSendGridApi(
+                    $usuario->correo,
+                    trim($usuario->nombre.' '.$usuario->apellido),
+                    $mensaje,
+                    'Tu cuenta ha sido activada',
+                    'emails.cuenta_activada'
+                );
+                $canalesEnviados[] = 'email';
+            } catch (Throwable $exception) {
+                $canalesFallidos[] = 'email';
+                Log::warning('No se pudo enviar el correo de activacion de cuenta.', [
+                    'id_usuario' => $usuario->id_usuario,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        return response()->json([
+            'message' => empty($canalesFallidos)
+                ? 'Cuenta activada y aviso enviado correctamente.'
+                : 'Cuenta activada. No fue posible enviar todos los avisos.',
+            'data' => [
+                'id' => $usuario->id_usuario,
+                'estado' => 'activo',
+                'mensaje' => $mensaje,
+                'canales_enviados' => $canalesEnviados,
+                'canales_fallidos' => $canalesFallidos,
+            ],
         ]);
     }
 
@@ -124,14 +234,10 @@ class UsuarioController extends Controller
             return response()->json(['message' => 'La cuenta ya se encuentra inactiva.'], 422);
         }
 
-        $data = $request->validate([
-            'razon' => ['nullable', 'string', 'max:1000'],
-            'canales' => ['sometimes', 'array', 'min:1'],
-            'canales.*' => ['required', 'distinct', Rule::in(['inapp', 'email'])],
-        ]);
-        $razon = trim((string) ($data['razon'] ?? ''))
-            ?: 'Tu cuenta fue inactivada por administracion de acuerdo con las politicas de la plataforma.';
-        $canales = $data['canales'] ?? ['inapp', 'email'];
+        [$razon, $canales] = $this->validateNoticeOptions(
+            $request,
+            'Tu cuenta fue inactivada por administracion de acuerdo con las politicas de la plataforma.'
+        );
         $canalesEnviados = [];
         $canalesFallidos = [];
 
@@ -155,10 +261,12 @@ class UsuarioController extends Controller
 
         if (in_array('email', $canales, true)) {
             try {
-                $this->sendInactivationNoticeWithSendGridApi(
+                $this->sendAccountNoticeWithSendGridApi(
                     $usuario->correo,
                     trim($usuario->nombre.' '.$usuario->apellido),
-                    $razon
+                    $razon,
+                    'Tu cuenta ha sido inactivada',
+                    'emails.cuenta_inactivada'
                 );
                 $canalesEnviados[] = 'email';
             } catch (Throwable $exception) {
@@ -184,7 +292,129 @@ class UsuarioController extends Controller
         ]);
     }
 
-    private function sendInactivationNoticeWithSendGridApi(string $toEmail, string $nombre, string $razon): void
+    public function pause(Request $request, int $id): JsonResponse
+    {
+        if ($forbidden = $this->forbidNonAdmin($request)) {
+            return $forbidden;
+        }
+
+        $usuario = $this->usuarioService->findById($id);
+
+        if (! $usuario) {
+            return response()->json(['message' => 'Usuario no encontrado.'], 404);
+        }
+
+        if ($usuario->estado === 'pausado') {
+            return response()->json(['message' => 'La cuenta ya se encuentra en pausa.'], 422);
+        }
+
+        if ($usuario->estado !== 'activo') {
+            return response()->json([
+                'message' => 'Solo una cuenta activa puede ponerse en pausa sin alterar su visibilidad.',
+            ], 422);
+        }
+
+        $data = $request->validate([
+            'razon' => ['nullable', 'string', 'max:1000'],
+        ]);
+        $razon = trim((string) ($data['razon'] ?? ''))
+            ?: 'Tu cuenta fue puesta en pausa por administracion. Durante este periodo solo puedes consultar tu informacion.';
+
+        $this->usuarioService->pause($usuario);
+        $this->notificacionService->createAdminNotice(
+            (int) $request->user()->id_usuario,
+            [
+                'destinatarios' => [$usuario->id_usuario],
+                'titulo' => 'Cuenta en pausa',
+                'contenido' => $razon,
+                'tipo' => 'cuenta',
+                'urgencia' => 'media',
+                'canales' => ['inapp'],
+                'segmentos' => ['seleccionados'],
+            ]
+        );
+
+        return response()->json([
+            'message' => 'Cuenta puesta en pausa y motivo registrado correctamente.',
+            'data' => [
+                'id' => $usuario->id_usuario,
+                'estado' => 'pausado',
+                'razon' => $razon,
+                'canales_enviados' => ['inapp'],
+                'canales_fallidos' => [],
+            ],
+        ]);
+    }
+
+    public function block(Request $request, int $id): JsonResponse
+    {
+        if ($forbidden = $this->forbidNonAdmin($request)) {
+            return $forbidden;
+        }
+
+        $usuario = $this->usuarioService->findById($id);
+
+        if (! $usuario) {
+            return response()->json(['message' => 'Usuario no encontrado.'], 404);
+        }
+
+        if ($usuario->estado === 'bloqueado') {
+            return response()->json(['message' => 'La cuenta ya se encuentra bloqueada.'], 422);
+        }
+
+        $data = $request->validate([
+            'razon' => ['nullable', 'string', 'max:1000'],
+        ]);
+        $razon = trim((string) ($data['razon'] ?? ''))
+            ?: 'Tu cuenta fue bloqueada por administracion. Contacta al equipo de soporte para mas informacion.';
+
+        $this->usuarioService->block($usuario);
+        $this->notificacionService->createAdminNotice(
+            (int) $request->user()->id_usuario,
+            [
+                'destinatarios' => [$usuario->id_usuario],
+                'titulo' => 'Cuenta bloqueada',
+                'contenido' => $razon,
+                'tipo' => 'seguridad',
+                'urgencia' => 'alta',
+                'canales' => ['inapp'],
+                'segmentos' => ['seleccionados'],
+            ]
+        );
+
+        return response()->json([
+            'message' => 'Cuenta bloqueada y motivo registrado correctamente.',
+            'data' => [
+                'id' => $usuario->id_usuario,
+                'estado' => 'bloqueado',
+                'razon' => $razon,
+                'canales_enviados' => ['inapp'],
+                'canales_fallidos' => [],
+            ],
+        ]);
+    }
+
+    private function validateNoticeOptions(Request $request, string $defaultMessage): array
+    {
+        $data = $request->validate([
+            'razon' => ['nullable', 'string', 'max:1000'],
+            'canales' => ['sometimes', 'array', 'min:1'],
+            'canales.*' => ['required', 'distinct', Rule::in(['inapp', 'email'])],
+        ]);
+
+        return [
+            trim((string) ($data['razon'] ?? '')) ?: $defaultMessage,
+            $data['canales'] ?? ['inapp', 'email'],
+        ];
+    }
+
+    private function sendAccountNoticeWithSendGridApi(
+        string $toEmail,
+        string $nombre,
+        string $mensaje,
+        string $subject,
+        string $view
+    ): void
     {
         $apiKey = (string) env('SENDGRID_API_KEY', '');
         $fromEmail = (string) env('SENDGRID_FROM_ADDRESS', env('MAIL_FROM_ADDRESS', ''));
@@ -195,9 +425,10 @@ class UsuarioController extends Controller
             throw new \RuntimeException('Falta SENDGRID_API_KEY o SENDGRID_FROM_ADDRESS en .env');
         }
 
-        $html = view('emails.cuenta_inactivada', [
+        $html = view($view, [
             'nombre' => $nombre,
-            'razon' => $razon,
+            'mensaje' => $mensaje,
+            'razon' => $mensaje,
         ])->render();
 
         $response = Http::withToken($apiKey)
@@ -212,7 +443,7 @@ class UsuarioController extends Controller
                     'email' => $fromEmail,
                     'name' => $fromName,
                 ],
-                'subject' => 'Tu cuenta ha sido inactivada',
+                'subject' => $subject,
                 'content' => [[
                     'type' => 'text/html',
                     'value' => $html,

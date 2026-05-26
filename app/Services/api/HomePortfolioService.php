@@ -171,7 +171,7 @@ class HomePortfolioService
             ->leftJoinSub($projectTotals, 'proyectos_publicos', function ($join) {
                 $join->on('proyectos_publicos.id_usuario', '=', 'usuarios.id_usuario');
             })
-            ->where('usuarios.estado', 'activo')
+            ->whereIn('usuarios.estado', ['activo', 'pausado'])
             ->whereRaw('perfiles.es_publico = true')
             ->select([
                 'usuarios.id_usuario',

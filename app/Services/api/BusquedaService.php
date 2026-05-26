@@ -93,7 +93,7 @@ class BusquedaService
                 $join->on('vis_pais.usuario_id', '=', 'usuarios.id_usuario')
                     ->whereRaw("vis_pais.campo = 'pais'");
             })
-            ->where('usuarios.estado', 'activo')
+            ->whereIn('usuarios.estado', ['activo', 'pausado'])
             ->whereRaw('perfiles.es_publico IS TRUE');
     }
 
@@ -1166,7 +1166,7 @@ class BusquedaService
                     ->whereRaw("vis_profesion.campo = 'profesion'");
             })
             ->select('perfiles.profesion')
-            ->where('usuarios.estado', 'activo')
+            ->whereIn('usuarios.estado', ['activo', 'pausado'])
             ->whereRaw('perfiles.es_publico IS TRUE')
             ->whereRaw('vis_profesion.visible IS TRUE')
             ->whereNotNull('perfiles.profesion')

@@ -39,11 +39,39 @@ class UsuarioService
         return $usuario->fresh();
     }
 
+    public function activate(Usuario $usuario): void
+    {
+        $usuario->update([
+            'estado' => 'activo',
+            'intentos_fallidos' => 0,
+            'fecha_bloqueo' => null,
+        ]);
+    }
+
     public function delete(Usuario $usuario): void
     {
-        DB::transaction(function () use ($usuario) {
+        $this->restrictAccount($usuario, 'inactivo');
+    }
+
+    public function block(Usuario $usuario): void
+    {
+        $this->restrictAccount($usuario, 'bloqueado');
+    }
+
+    public function pause(Usuario $usuario): void
+    {
+        $usuario->update([
+            'estado' => 'pausado',
+            'intentos_fallidos' => 0,
+            'fecha_bloqueo' => null,
+        ]);
+    }
+
+    private function restrictAccount(Usuario $usuario, string $estado): void
+    {
+        DB::transaction(function () use ($usuario, $estado) {
             $usuario->update([
-                'estado' => 'inactivo',
+                'estado' => $estado,
                 'intentos_fallidos' => 0,
                 'fecha_bloqueo' => null,
             ]);

@@ -19,7 +19,7 @@ class PortafolioPublicoService
 
         if (
             ! $usuario
-            || $usuario->estado !== 'activo'
+            || ! in_array($usuario->estado, ['activo', 'pausado'], true)
             || ! $usuario->perfil
             || ! $this->toBoolean($usuario->perfil->es_publico, true)
         ) {
