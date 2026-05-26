@@ -54,8 +54,9 @@ class ProyectoController extends Controller
             )
             ->get();
 
-        $data = $proyectos->map(function ($row) {
-            return $this->serializeProject((array) $row);
+        $indexContext = $this->loadProjectIndexContext($proyectos, $userId);
+        $data = $proyectos->map(function ($row) use ($indexContext) {
+            return $this->serializeProject((array) $row, $indexContext);
         })->values();
 
         return response()->json(['data' => $data]);
@@ -789,91 +790,95 @@ class ProyectoController extends Controller
         return $row ? (array) $row : null;
     }
 
-    private function serializeProject(array $project): array
+    private function serializeProject(array $project, ?array $indexContext = null): array
     {
         $id = (int) $project['id_proyecto'];
 
-        $evidencias = DB::table('proyecto_evidencias')
-            ->where('id_proyecto', $id)
-            ->whereNull('deleted_at')
-            ->orderBy('orden')
-            ->orderBy('id_evidencia')
-            ->get()
-            ->map(function ($ev) {
-                $arr = (array) $ev;
-                $arr['archivo_url'] = $arr['url'] ?? null;
-                if (in_array(strtolower((string) ($arr['tipo'] ?? '')), [self::TIPO_IMAGEN, 'captura'], true)) {
-                    $variants = $this->profileImageVariants->getProjectVariantUrls($arr['url'] ?? null);
-                    $arr['imagen_card_url'] = $variants['card'] ?? null;
-                    $arr['imagen_detail_url'] = $variants['detail'] ?? null;
-                }
-                return $arr;
-            })
-            ->values();
+        $evidencias = $indexContext !== null
+            ? collect($indexContext['evidencias'][$id] ?? [])
+            : DB::table('proyecto_evidencias')
+                ->where('id_proyecto', $id)
+                ->whereNull('deleted_at')
+                ->orderBy('orden')
+                ->orderBy('id_evidencia')
+                ->get()
+                ->map(fn ($ev) => $this->serializeProjectEvidence($ev))
+                ->values();
 
-        $repositoriosDetalle = DB::table('proyecto_repositorios as pr')
-            ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
-            ->where('pr.id_proyecto', $id)
-            ->whereNull('pr.deleted_at')
-            ->orderBy('pr.id_proyecto_repositorio')
-            ->select(
-                'pr.id_proyecto_repositorio',
-                'pr.nombre',
-                'pr.tipo',
-                'pr.proveedor',
-                'pr.url_repositorio',
-                'pr.descripcion',
-                'rg.github_owner',
-                'rg.github_repo_name',
-                'rg.github_description',
-                'rg.github_homepage',
-                'rg.stars_count',
-                'rg.forks_count',
-                'rg.commits_count',
-                'rg.contributors_count',
-                'rg.last_push_at',
-                'rg.last_sync_at'
-            )
-            ->get()
-            ->map(fn ($repo) => (array) $repo)
-            ->values();
+        $repositoriosDetalle = $indexContext !== null
+            ? collect($indexContext['repositorios'][$id] ?? [])
+            : DB::table('proyecto_repositorios as pr')
+                ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+                ->where('pr.id_proyecto', $id)
+                ->whereNull('pr.deleted_at')
+                ->orderBy('pr.id_proyecto_repositorio')
+                ->select(
+                    'pr.id_proyecto_repositorio',
+                    'pr.nombre',
+                    'pr.tipo',
+                    'pr.proveedor',
+                    'pr.url_repositorio',
+                    'pr.descripcion',
+                    'rg.github_owner',
+                    'rg.github_repo_name',
+                    'rg.github_description',
+                    'rg.github_homepage',
+                    'rg.stars_count',
+                    'rg.forks_count',
+                    'rg.commits_count',
+                    'rg.contributors_count',
+                    'rg.last_push_at',
+                    'rg.last_sync_at'
+                )
+                ->get()
+                ->map(fn ($repo) => (array) $repo)
+                ->values();
 
         $repositorios = $repositoriosDetalle
             ->pluck('url_repositorio')
             ->filter()
             ->values();
 
-        $tecnologias = DB::table('uso_tecnologias as ut')
-            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
-            ->where('ut.id_proyecto', $id)
-            ->whereNull('ut.deleted_at')
-            ->whereNull('t.deleted_at')
-            ->orderByDesc('ut.es_principal')
-            ->orderBy('t.nombre')
-            ->select('t.id_tecnologia', 't.nombre', 't.tipo', 't.icono_url', 't.color')
-            ->get()
-            ->values();
+        $tecnologias = $indexContext !== null
+            ? collect($indexContext['tecnologias'][$id] ?? [])
+            : DB::table('uso_tecnologias as ut')
+                ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+                ->where('ut.id_proyecto', $id)
+                ->whereNull('ut.deleted_at')
+                ->whereNull('t.deleted_at')
+                ->orderByDesc('ut.es_principal')
+                ->orderBy('t.nombre')
+                ->select('t.id_tecnologia', 't.nombre', 't.tipo', 't.icono_url', 't.color')
+                ->get()
+                ->values();
 
         $tecnologiaNombres = $tecnologias
             ->pluck('nombre')
             ->filter()
             ->values();
 
-        $participantesCount = DB::table('participaciones')
-            ->where('id_proyecto', $id)
-            ->whereNull('deleted_at')
-            ->count();
+        $participantesCount = $indexContext !== null
+            ? (int) ($indexContext['participantes_count'][$id] ?? 0)
+            : DB::table('participaciones')
+                ->where('id_proyecto', $id)
+                ->whereNull('deleted_at')
+                ->count();
 
         $currentUserId = (int) ($project['participacion_id_usuario'] ?? 0);
-        $permissions = $currentUserId > 0
-            ? $this->resolveProjectPermissions($currentUserId, $id)
-            : $this->defaultProjectPermissions();
+        $permissions = $indexContext !== null
+            ? ($indexContext['permisos'][$id] ?? $this->defaultProjectPermissions())
+            : ($currentUserId > 0
+                ? $this->resolveProjectPermissions($currentUserId, $id)
+                : $this->defaultProjectPermissions());
+        $configuration = $indexContext !== null
+            ? ($indexContext['configuraciones'][$id] ?? $this->defaultProjectConfiguration())
+            : $this->getProjectConfiguration($id);
 
         return [
             ...$project,
             'id' => $id,
             'id_proyecto' => $id,
-            'configuracion' => $this->getProjectConfiguration($id),
+            'configuracion' => $configuration,
             'permisos' => $permissions,
             'puede_editar' => $permissions['puede_editar'],
             'puede_eliminar' => $permissions['puede_eliminar'],
@@ -901,6 +906,167 @@ class ProyectoController extends Controller
                 'fecha_fin' => $project['part_fecha_fin'] ?? null,
             ],
             'evidencias' => $evidencias,
+        ];
+    }
+
+    private function serializeProjectEvidence(object|array $evidence): array
+    {
+        $arr = (array) $evidence;
+        unset($arr['group_id_proyecto']);
+        $arr['archivo_url'] = $arr['url'] ?? null;
+
+        if (in_array(strtolower((string) ($arr['tipo'] ?? '')), [self::TIPO_IMAGEN, 'captura'], true)) {
+            $variants = $this->profileImageVariants->getProjectVariantUrls($arr['url'] ?? null);
+            $arr['imagen_card_url'] = $variants['card'] ?? null;
+            $arr['imagen_detail_url'] = $variants['detail'] ?? null;
+        }
+
+        return $arr;
+    }
+
+    private function loadProjectIndexContext($projects, int $userId): array
+    {
+        $ids = $projects
+            ->pluck('id_proyecto')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($ids === []) {
+            return [
+                'evidencias' => [],
+                'repositorios' => [],
+                'tecnologias' => [],
+                'participantes_count' => [],
+                'configuraciones' => [],
+                'permisos' => [],
+            ];
+        }
+
+        $evidencias = DB::table('proyecto_evidencias')
+            ->whereIn('id_proyecto', $ids)
+            ->whereNull('deleted_at')
+            ->orderBy('id_proyecto')
+            ->orderBy('orden')
+            ->orderBy('id_evidencia')
+            ->get()
+            ->groupBy('id_proyecto')
+            ->map(fn ($items) => $items->map(fn ($item) => $this->serializeProjectEvidence($item))->values()->all())
+            ->all();
+
+        $repositorios = DB::table('proyecto_repositorios as pr')
+            ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->whereIn('pr.id_proyecto', $ids)
+            ->whereNull('pr.deleted_at')
+            ->orderBy('pr.id_proyecto')
+            ->orderBy('pr.id_proyecto_repositorio')
+            ->select(
+                'pr.id_proyecto as group_id_proyecto',
+                'pr.id_proyecto_repositorio',
+                'pr.nombre',
+                'pr.tipo',
+                'pr.proveedor',
+                'pr.url_repositorio',
+                'pr.descripcion',
+                'rg.github_owner',
+                'rg.github_repo_name',
+                'rg.github_description',
+                'rg.github_homepage',
+                'rg.stars_count',
+                'rg.forks_count',
+                'rg.commits_count',
+                'rg.contributors_count',
+                'rg.last_push_at',
+                'rg.last_sync_at'
+            )
+            ->get()
+            ->groupBy('group_id_proyecto')
+            ->map(fn ($items) => $items->map(function ($item) {
+                $arr = (array) $item;
+                unset($arr['group_id_proyecto']);
+                return $arr;
+            })->values()->all())
+            ->all();
+
+        $tecnologias = DB::table('uso_tecnologias as ut')
+            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+            ->whereIn('ut.id_proyecto', $ids)
+            ->whereNull('ut.deleted_at')
+            ->whereNull('t.deleted_at')
+            ->orderBy('ut.id_proyecto')
+            ->orderByDesc('ut.es_principal')
+            ->orderBy('t.nombre')
+            ->select('ut.id_proyecto as group_id_proyecto', 't.id_tecnologia', 't.nombre', 't.tipo', 't.icono_url', 't.color')
+            ->get()
+            ->groupBy('group_id_proyecto')
+            ->map(fn ($items) => $items->map(function ($item) {
+                $arr = (array) $item;
+                unset($arr['group_id_proyecto']);
+                return $arr;
+            })->values()->all())
+            ->all();
+
+        $counts = DB::table('participaciones')
+            ->whereIn('id_proyecto', $ids)
+            ->whereNull('deleted_at')
+            ->select(
+                'id_proyecto',
+                DB::raw('COUNT(*) as participantes_count'),
+                DB::raw('SUM(CASE WHEN es_propietario IS TRUE THEN 1 ELSE 0 END) as propietarios_count')
+            )
+            ->groupBy('id_proyecto')
+            ->get()
+            ->keyBy('id_proyecto');
+
+        $configuraciones = DB::table('proyecto_configuraciones')
+            ->whereIn('id_proyecto', $ids)
+            ->get()
+            ->mapWithKeys(fn ($row) => [
+                (int) $row->id_proyecto => $this->normalizeProjectConfiguration((array) $row, (int) $row->id_proyecto),
+            ])
+            ->all();
+
+        $validaciones = DB::table('proyecto_repositorios as pr')
+            ->join('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->join('usuario_repositorio_validaciones as urv', function ($join) use ($userId) {
+                $join->on('urv.id_repositorio_github', '=', 'rg.id_repositorio_github')
+                    ->where('urv.id_usuario', '=', $userId);
+            })
+            ->whereIn('pr.id_proyecto', $ids)
+            ->where('pr.proveedor', 'github')
+            ->whereNull('pr.deleted_at')
+            ->whereRaw('urv.validado = TRUE')
+            ->select('pr.id_proyecto', 'urv.relacion_github', 'urv.es_propietario', 'urv.permisos_github')
+            ->get()
+            ->groupBy('id_proyecto');
+
+        $permisos = [];
+        $participantesCount = [];
+        foreach ($projects as $project) {
+            $projectArray = (array) $project;
+            $id = (int) $projectArray['id_proyecto'];
+            $countsForProject = $counts->get($id);
+            $participantesCount[$id] = (int) ($countsForProject->participantes_count ?? 0);
+            $config = $configuraciones[$id] ?? $this->defaultProjectConfiguration();
+            $config['id_proyecto'] = $id;
+            $configuraciones[$id] = $config;
+            $permisos[$id] = $this->resolveProjectPermissionsFromLoadedData(
+                $projectArray,
+                $config,
+                $validaciones->get($id, collect()),
+                (int) ($countsForProject->participantes_count ?? 0),
+                (int) ($countsForProject->propietarios_count ?? 0)
+            );
+        }
+
+        return [
+            'evidencias' => $evidencias,
+            'repositorios' => $repositorios,
+            'tecnologias' => $tecnologias,
+            'participantes_count' => $participantesCount,
+            'configuraciones' => $configuraciones,
+            'permisos' => $permisos,
         ];
     }
 
@@ -936,9 +1102,14 @@ class ProyectoController extends Controller
                 ->first();
         }
 
+        return $this->normalizeProjectConfiguration((array) $row, $idProyecto);
+    }
+
+    private function normalizeProjectConfiguration(array $row, int $idProyecto): array
+    {
         $config = [
             ...$this->defaultProjectConfiguration(),
-            ...(array) $row,
+            ...$row,
         ];
 
         foreach ([
@@ -1024,6 +1195,47 @@ class ProyectoController extends Controller
         ];
     }
 
+    private function resolveProjectPermissionsFromLoadedData(
+        array $participacion,
+        array $config,
+        $validaciones,
+        int $activeParticipants,
+        int $activeOwners
+    ): array {
+        $authority = $this->getGithubAuthorityFromValidations($validaciones, $config);
+        $isOwner = $this->truthy($participacion['es_propietario'] ?? false);
+        $isGithubAuthority = (bool) ($authority['tiene_autoridad'] ?? false);
+        $isValidated = $this->truthy($participacion['participacion_validada'] ?? false)
+            || $validaciones->isNotEmpty();
+        $githubOverridesCreator = (bool) ($config['github_prevalece_sobre_creador'] ?? true);
+        $adminPolicy = $config['puede_administrar_proyecto'] ?? 'propietarios';
+        $githubCanManage = $isGithubAuthority
+            && ($githubOverridesCreator || $adminPolicy === 'autoridad_github');
+        $canAdmin = $isOwner || $githubCanManage;
+
+        $canEdit = match ($config['puede_editar_proyecto'] ?? 'participantes_validados') {
+            'propietarios' => $isOwner || ($githubOverridesCreator && $isGithubAuthority),
+            'autoridad_github' => $isOwner || $isGithubAuthority,
+            'participantes' => true,
+            default => $isOwner || ($githubOverridesCreator && $isGithubAuthority) || $isValidated,
+        };
+
+        return [
+            'puede_editar' => $canEdit,
+            'puede_eliminar' => $isOwner,
+            'puede_configurar' => $canAdmin,
+            'puede_administrar' => $canAdmin,
+            'puede_desvincular_participacion' => $activeParticipants > 1 && ! ($isOwner && $activeOwners <= 1),
+            'puede_remover_participantes_sin_validacion' =>
+                (bool) ($config['permitir_remover_participantes_sin_validacion'] ?? false) && $canAdmin,
+            'es_propietario' => $isOwner,
+            'es_autoridad_github' => $isGithubAuthority,
+            'participacion_validada' => $isValidated,
+            'nivel_github' => $authority['nivel'] ?? null,
+            'relacion_github' => $authority['relacion'] ?? null,
+        ];
+    }
+
     private function activeProjectParticipantsCount(int $idProyecto): int
     {
         return DB::table('participaciones')
@@ -1079,6 +1291,11 @@ class ProyectoController extends Controller
             ->whereRaw('validado = TRUE')
             ->get();
 
+        return $this->getGithubAuthorityFromValidations($validaciones, $config);
+    }
+
+    private function getGithubAuthorityFromValidations($validaciones, array $config): array
+    {
         foreach ($validaciones as $validacion) {
             $relation = Str::lower((string) ($validacion->relacion_github ?? ''));
             $permissions = $this->decodeGithubPermissions($validacion->permisos_github ?? null);
