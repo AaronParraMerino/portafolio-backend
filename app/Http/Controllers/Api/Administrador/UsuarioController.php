@@ -6,13 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\SesionBase;
 use App\Models\Usuario;
 use App\Services\api\SeccionService;
+use App\Services\api\UsuarioService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class UsuarioController extends Controller
 {
-    public function __construct(private readonly SeccionService $seccionService)
-    {
+    public function __construct(
+        private readonly SeccionService $seccionService,
+        private readonly UsuarioService $usuarioService
+    ) {
     }
 
     public function index(Request $request): JsonResponse
@@ -65,6 +68,34 @@ class UsuarioController extends Controller
             'sourceReady' => true,
             'supportsMutations' => false,
             'supportsSessions' => false,
+            'supportsInactivation' => true,
+        ]);
+    }
+
+    public function inactivate(Request $request, int $id): JsonResponse
+    {
+        if ($forbidden = $this->forbidNonAdmin($request)) {
+            return $forbidden;
+        }
+
+        $usuario = $this->usuarioService->findById($id);
+
+        if (! $usuario) {
+            return response()->json(['message' => 'Usuario no encontrado.'], 404);
+        }
+
+        if ($usuario->estado === 'inactivo') {
+            return response()->json(['message' => 'La cuenta ya se encuentra inactiva.'], 422);
+        }
+
+        $this->usuarioService->delete($usuario);
+
+        return response()->json([
+            'message' => 'Cuenta inactivada correctamente.',
+            'data' => [
+                'id' => $usuario->id_usuario,
+                'estado' => 'inactivo',
+            ],
         ]);
     }
 
