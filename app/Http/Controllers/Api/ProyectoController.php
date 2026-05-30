@@ -561,6 +561,17 @@ class ProyectoController extends Controller
             $saved[] = $url;
         }
 
+        //seccion para notificar
+        if (!empty($saved)) {
+            $this->proyectoNotificacionGuardadoService->notificarMaterialesProyectoActualizados(
+                idProyecto: $id,
+                idUsuarioActor: $userId,
+                tipoMaterial: 'imágenes',
+                accion: 'agregado'
+            );
+        }
+        //fin seccion para notificar
+
         return response()->json(['urls' => $saved, 'imagenes' => $saved]);
     }
 
@@ -612,6 +623,15 @@ class ProyectoController extends Controller
                 'deleted_at' => now(),
                 'updated_at' => now(),
             ]);
+
+            //seccion para notificar
+            $this->proyectoNotificacionGuardadoService->notificarMaterialesProyectoActualizados(
+                idProyecto: $id,
+                idUsuarioActor: $userId,
+                tipoMaterial: 'imágenes',
+                accion: 'eliminado'
+            );
+            //fin seccion para notificar
         }
 
         return response()->json(['message' => 'Imágenes eliminadas correctamente']);
@@ -686,6 +706,17 @@ class ProyectoController extends Controller
             ];
         }
 
+        //seccion para notificar
+        if (!empty($docs)) {
+            $this->proyectoNotificacionGuardadoService->notificarMaterialesProyectoActualizados(
+                idProyecto: $id,
+                idUsuarioActor: $userId,
+                tipoMaterial: 'documentos',
+                accion: 'agregado'
+            );
+        }
+        //fin seccion para notificar
+
         return response()->json(['documents' => $docs, 'documentos' => $docs, 'urls' => collect($docs)->pluck('url')->values()]);
     }
 
@@ -736,6 +767,15 @@ class ProyectoController extends Controller
                 'deleted_at' => now(),
                 'updated_at' => now(),
             ]);
+
+        //seccion para notificar
+        $this->proyectoNotificacionGuardadoService->notificarMaterialesProyectoActualizados(
+            idProyecto: $id,
+            idUsuarioActor: $userId,
+            tipoMaterial: 'documentos',
+            accion: 'eliminado'
+        );
+        //fin seccion para notificar
         }
 
         return response()->json(['message' => 'Documentos eliminados correctamente']);
@@ -769,6 +809,16 @@ class ProyectoController extends Controller
         $this->syncLinkEvidences($id, $payload);
         $this->syncProjectRepositories($userId, $id, $payload);
         $this->syncProjectTechnologies($userId, $id, $payload);
+
+
+        //seccion para notificar
+        if (!empty($payload)) {
+            $this->proyectoNotificacionGuardadoService->notificarEnlacesProyectoActualizados(
+                idProyecto: $id,
+                idUsuarioActor: $userId
+            );
+        }
+        //fin seccion para notificar
 
         $updated = $this->findProjectForUser($userId, $id);
         return response()->json(['data' => $this->serializeProject($updated)]);

@@ -76,18 +76,39 @@ class Usuario extends Authenticatable
     {
         return $this->hasOne(PersonalizacionPortafolio::class, 'usuario_id', 'id_usuario');
     }
-
-    public function notificaciones()
-    {
-    return $this->hasMany(Notificacion::class, 'id_usuario_destino', 'id_usuario');
-    }
-
-    public function notificacionesGeneradas()
-    {
-        return $this->hasMany(Notificacion::class, 'id_usuario_actor', 'id_usuario');
-    }
+    
     public function eventosPersonales()
     {
         return $this->hasMany(EventoPersonal::class, 'usuario_id', 'id_usuario');
     }
+
+
+    /// notificaciones relacionadas al usuario, tanto generadas por el usuario como recibidas
+    public function notificacionUsuarios()
+    {
+        return $this->hasMany(
+            NotificacionUsuario::class,
+            'id_usuario',
+            'id_usuario'
+        );
+    }
+
+    public function notificaciones()
+    {
+        return $this->belongsToMany(
+            Notificacion::class,
+            'notificacion_usuario',
+            'id_usuario',
+            'id_notificacion',
+            'id_usuario',
+            'id_notificacion'
+        )
+        ->withPivot([
+            'id_notificacion_usuario',
+            'leido_en',
+            'created_at',
+            'updated_at',
+        ]);
+    }
+    ///
 }

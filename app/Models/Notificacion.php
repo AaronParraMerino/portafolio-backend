@@ -16,60 +16,72 @@ class Notificacion extends Model
     protected $keyType = 'int';
 
     protected $fillable = [
-        'id_usuario_destino',
         'id_usuario_actor',
-        'tipo',
         'modulo',
-        'titulo',
-        'contenido',
-        'referencia_tipo',
-        'referencia_id',
-        'data',
-        'event_key',
-        'leida_en',
+        'contexto_tipo',
+        'contexto_referencia',
+        'grupo_titulo',
+        'tipo',
+        'mensaje',
     ];
-
-    protected function casts(): array
-    {
-        return [
-            'data' => 'array',
-            'leida_en' => 'datetime',
-        ];
-    }
-
-    public function usuarioDestino()
-    {
-        return $this->belongsTo(Usuario::class, 'id_usuario_destino', 'id_usuario');
-    }
 
     public function usuarioActor()
     {
         return $this->belongsTo(Usuario::class, 'id_usuario_actor', 'id_usuario');
     }
 
-    public function scopePendientes($query)
+    public function usuarios()
     {
-        return $query->whereNull('leida_en');
+        return $this->belongsToMany(
+            Usuario::class,
+            'notificacion_usuario',
+            'id_notificacion',
+            'id_usuario'
+        )
+        ->withPivot([
+            'id_notificacion_usuario',
+            'leido_en',
+        ])
+        ->withTimestamps();
     }
 
-    public function scopeLeidas($query)
+    public function notificacionUsuarios()
     {
-        return $query->whereNotNull('leida_en');
+        return $this->hasMany(
+            NotificacionUsuario::class,
+            'id_notificacion',
+            'id_notificacion'
+        );
     }
 
-    public function scopeDelUsuario($query, int $idUsuario)
+    public function scopeDelModulo($query, string $modulo)
     {
-        return $query->where('id_usuario_destino', $idUsuario);
+        return $query->where('modulo', $modulo);
     }
 
-    public function marcarComoLeida(): bool
+    public function scopeDelTipo($query, string $tipo)
     {
-        if ($this->leida_en !== null) {
-            return true;
-        }
+        return $query->where('tipo', $tipo);
+    }
 
-        return $this->update([
-            'leida_en' => now(),
-        ]);
+    public function scopeDelContexto($query, ?string $contextoTipo, ?string $contextoReferencia)
+    {
+        return $query
+            ->when($contextoTipo, function ($q) use ($contextoTipo) {
+                $q->where('contexto_tipo', $contextoTipo);
+            })
+            ->when($contextoReferencia, function ($q) use ($contextoReferencia) {
+                $q->where('contexto_referencia', $contextoReferencia);
+            });
+    }
+
+    public function marcarComoLeidaParaUsuario(int $idUsuario): bool
+    {
+        return $this->notificacionUsuarios()
+            ->where('id_usuario', $idUsuario)
+            ->whereNull('leido_en')
+            ->update([
+                'leido_en' => now(),
+            ]) > 0;
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Services\api;
 
 use App\Models\Notificacion;
+use App\Models\NotificacionUsuario;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -32,20 +33,14 @@ class ProyectoNotificacionGuardadoService
         return $this->crearParaUsuarios($propietarios, [
             'id_usuario_actor' => $idUsuarioActor ?? $idUsuarioNuevo,
             'tipo' => 'project_participant_added',
-            'titulo' => 'Nuevo participante',
-            'contenido' => 'Un usuario se unió al proyecto "' . $proyecto->titulo . '".',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-                'id_usuario_participante' => $idUsuarioNuevo,
-            ],
-            'event_key_base' => 'project_participant_added:project_' . $idProyecto . ':participant_' . $idUsuarioNuevo,
+            'mensaje' => 'Un usuario se unió al proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
     /**
-     * Notifica al usuario que fue removido de un proyecto
+     * Notifica cuando un participante fue removido de un proyecto
      */
     public function notificarParticipanteRemovido(
         int $idProyecto,
@@ -58,23 +53,43 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('Proyecto no encontrado');
         }
 
-        return $this->crear([
-            'id_usuario_destino' => $idUsuarioRemovido,
+        $resultados = [];
+
+        // Siempre se notifica al afectado.
+        $resultados[] = $this->crearParaUsuarios(collect([$idUsuarioRemovido]), [
             'id_usuario_actor' => $idUsuarioActor,
             'tipo' => 'project_participant_removed',
-            'titulo' => 'Fuiste removido',
-            'contenido' => 'Tu participación en el proyecto "' . $proyecto->titulo . '" fue removida.',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-            ],
-            'event_key' => 'project_participant_removed:project_' . $idProyecto . ':user_' . $idUsuarioRemovido,
+            'mensaje' => 'Tu participación en el proyecto "' . $proyecto->titulo . '" fue removida.',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
+
+        /*
+         * Si el proyecto tiene 10 miembros o menos, también se avisa a los demás miembros,
+         * excepto al usuario que hizo la acción y al usuario afectado.
+         */
+        if ($this->proyectoTieneGrupoPequeno($idProyecto)) {
+            $participantes = $this->obtenerParticipantesActivos($idProyecto, [
+                $idUsuarioActor,
+                $idUsuarioRemovido,
+            ]);
+
+            if ($participantes->isNotEmpty()) {
+                $resultados[] = $this->crearParaUsuarios($participantes, [
+                    'id_usuario_actor' => $idUsuarioActor,
+                    'tipo' => 'project_participant_removed_group',
+                    'mensaje' => 'Un participante fue removido del proyecto "' . $proyecto->titulo . '".',
+                    'contexto_referencia' => 'proyecto_' . $idProyecto,
+                    'grupo_titulo' => $proyecto->titulo,
+                ]);
+            }
+        }
+
+        return $this->combinarResultados($resultados);
     }
 
     /**
-     * Notifica a propietarios que un participante se desvinculó
+     * Notifica cuando un participante se desvinculó de un proyecto
      */
     public function notificarParticipanteDesvinculado(
         int $idProyecto,
@@ -86,24 +101,28 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('Proyecto no encontrado');
         }
 
-        $propietarios = $this->obtenerPropietariosActivos($idProyecto, [$idUsuarioDesvinculado]);
-
-        if ($propietarios->isEmpty()) {
-            return $this->sinAccion('No hay propietarios para notificar');
+        if ($this->proyectoTieneGrupoPequeno($idProyecto)) {
+            $destinatarios = $this->obtenerParticipantesActivos($idProyecto, [
+                $idUsuarioDesvinculado,
+            ]);
+        } else {
+            $destinatarios = $this->obtenerPropietariosActivos($idProyecto, [
+                $idUsuarioDesvinculado,
+            ]);
         }
 
-        return $this->crearParaUsuarios($propietarios, [
+        if ($destinatarios->isEmpty()) {
+            return $this->sinAccion('No hay usuarios para notificar');
+        }
+
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioDesvinculado);
+
+        return $this->crearParaUsuarios($destinatarios, [
             'id_usuario_actor' => $idUsuarioDesvinculado,
             'tipo' => 'project_participant_left',
-            'titulo' => 'Participante salió',
-            'contenido' => 'Un participante se desvinculó del proyecto "' . $proyecto->titulo . '".',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-                'id_usuario_participante' => $idUsuarioDesvinculado,
-            ],
-            'event_key_base' => 'project_participant_left:project_' . $idProyecto . ':participant_' . $idUsuarioDesvinculado,
+            'mensaje' => $nombreUsuario . ' se desvinculó del proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
@@ -120,18 +139,12 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('Proyecto no encontrado');
         }
 
-        return $this->crear([
-            'id_usuario_destino' => $idUsuarioValidado,
+        return $this->crearParaUsuarios(collect([$idUsuarioValidado]), [
             'id_usuario_actor' => null,
             'tipo' => 'project_participation_validated',
-            'titulo' => 'Participación validada',
-            'contenido' => 'Se confirmó tu participación en el proyecto "' . $proyecto->titulo . '".',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-            ],
-            'event_key' => 'project_participation_validated:project_' . $idProyecto . ':user_' . $idUsuarioValidado,
+            'mensaje' => 'Se confirmó tu participación en el proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
@@ -148,18 +161,12 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('Proyecto no encontrado');
         }
 
-        return $this->crear([
-            'id_usuario_destino' => $idUsuarioDestino,
+        return $this->crearParaUsuarios(collect([$idUsuarioDestino]), [
             'id_usuario_actor' => null,
             'tipo' => 'project_participation_not_validated',
-            'titulo' => 'No se pudo validar',
-            'contenido' => 'No se pudo confirmar tu participación en el proyecto "' . $proyecto->titulo . '".',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-            ],
-            'event_key' => 'project_participation_not_validated:project_' . $idProyecto . ':user_' . $idUsuarioDestino,
+            'mensaje' => 'No se pudo confirmar tu participación en el proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
@@ -187,18 +194,14 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('No hay otros participantes para notificar');
         }
 
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioActor);
+
         return $this->crearParaUsuarios($participantes, [
             'id_usuario_actor' => $idUsuarioActor,
             'tipo' => 'project_updated',
-            'titulo' => 'Proyecto actualizado',
-            'contenido' => 'Se actualizó el proyecto "' . $proyecto->titulo . '".',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-                'campos_actualizados' => array_keys($payload),
-            ],
-            'event_key_base' => 'project_updated:project_' . $idProyecto . ':update_' . now()->format('YmdHisv'),
+            'mensaje' => $nombreUsuario . ' actualizó el proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
@@ -221,17 +224,14 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('No hay otros participantes para notificar');
         }
 
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioActor);
+
         return $this->crearParaUsuarios($participantes, [
             'id_usuario_actor' => $idUsuarioActor,
             'tipo' => 'project_deleted',
-            'titulo' => 'Proyecto eliminado',
-            'contenido' => 'El proyecto "' . $proyecto->titulo . '" fue eliminado.',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-            ],
-            'event_key_base' => 'project_deleted:project_' . $idProyecto,
+            'mensaje' => $nombreUsuario . ' eliminó el proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
@@ -254,23 +254,62 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('No hay otros participantes para notificar');
         }
 
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioActor);
+
         return $this->crearParaUsuarios($participantes, [
             'id_usuario_actor' => $idUsuarioActor,
             'tipo' => 'project_configuration_updated',
-            'titulo' => 'Config. actualizada',
-            'contenido' => 'Se modificó la configuración del proyecto "' . $proyecto->titulo . '".',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-            ],
-            'event_key_base' => 'project_configuration_updated:project_' . $idProyecto . ':update_' . now()->format('YmdHisv'),
+            'mensaje' => $nombreUsuario . ' modificó la configuración del proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
+
+    /**
+     * Notifica a participantes cuando se actualizan materiales del proyecto
+     */
+    public function notificarMaterialesProyectoActualizados(
+        int $idProyecto,
+        int $idUsuarioActor,
+        string $tipoMaterial,
+        string $accion
+    ): array {
+        $proyecto = $this->obtenerProyecto($idProyecto);
+
+        if (!$proyecto) {
+            return $this->sinAccion('Proyecto no encontrado');
+        }
+
+        $participantes = $this->obtenerParticipantesActivos($idProyecto, [$idUsuarioActor]);
+
+        if ($participantes->isEmpty()) {
+            return $this->sinAccion('No hay otros participantes para notificar');
+        }
+
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioActor);
+
+        $mensaje = match ($accion) {
+            'agregado' => $nombreUsuario . ' agregó ' . $tipoMaterial . ' al proyecto "' . $proyecto->titulo . '".',
+            'eliminado' => $nombreUsuario . ' eliminó ' . $tipoMaterial . ' del proyecto "' . $proyecto->titulo . '".',
+            default => $nombreUsuario . ' actualizó ' . $tipoMaterial . ' del proyecto "' . $proyecto->titulo . '".',
+        };
+
+        return $this->crearParaUsuarios($participantes, [
+            'id_usuario_actor' => $idUsuarioActor,
+            'tipo' => 'project_materials_updated',
+            'mensaje' => $mensaje,
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
+        ]);
+    }
+
+
+    
     /**
      * Notifica a participantes cuando se agrega un repositorio relevante
      */
+    /*
     public function notificarRepositorioAgregado(
         int $idProyecto,
         int $idUsuarioActor,
@@ -288,151 +327,133 @@ class ProyectoNotificacionGuardadoService
             return $this->sinAccion('No hay otros participantes para notificar');
         }
 
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioActor);
+
         return $this->crearParaUsuarios($participantes, [
             'id_usuario_actor' => $idUsuarioActor,
             'tipo' => 'project_repository_added',
-            'titulo' => 'Repositorio agregado',
-            'contenido' => 'Se agregó un repositorio al proyecto "' . $proyecto->titulo . '".',
-            'referencia_id' => $idProyecto,
-            'data' => [
-                'id_proyecto' => $idProyecto,
-                'titulo_proyecto' => $proyecto->titulo,
-                'url_repositorio' => $urlRepositorio,
-            ],
-            'event_key_base' => 'project_repository_added:project_' . $idProyecto . ':repo_' . md5((string) $urlRepositorio),
+            'mensaje' => $nombreUsuario . ' agregó un repositorio al proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
+        ]);
+    }
+    */
+
+    /**
+     * Notifica a participantes cuando se actualizan enlaces del proyecto
+     */
+    public function notificarEnlacesProyectoActualizados(
+        int $idProyecto,
+        int $idUsuarioActor
+    ): array {
+        $proyecto = $this->obtenerProyecto($idProyecto);
+
+        if (!$proyecto) {
+            return $this->sinAccion('Proyecto no encontrado');
+        }
+
+        $participantes = $this->obtenerParticipantesActivos($idProyecto, [$idUsuarioActor]);
+
+        if ($participantes->isEmpty()) {
+            return $this->sinAccion('No hay otros participantes para notificar');
+        }
+
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioActor);
+
+        return $this->crearParaUsuarios($participantes, [
+            'id_usuario_actor' => $idUsuarioActor,
+            'tipo' => 'project_links_updated',
+            'mensaje' => $nombreUsuario . ' actualizó los enlaces del proyecto "' . $proyecto->titulo . '".',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
         ]);
     }
 
     /**
-     * Guarda una notificación individual de proyecto
+     * Guarda una notificación y la asigna a varios usuarios
      */
-    private function crear(array $data): array
+    private function crearParaUsuarios(Collection $usuarios, array $data): array
     {
-        $validacion = $this->validarDatos($data);
+        $idsUsuarios = $this->normalizarIdsUsuarios($usuarios);
+
+        $validacion = $this->validarDatos($data, $idsUsuarios);
 
         if (!$validacion['status']) {
             return $validacion;
         }
 
         try {
-            $notificacion = DB::transaction(function () use ($data) {
-                $eventKey = $data['event_key'] ?? null;
+            $resultado = DB::transaction(function () use ($data, $idsUsuarios) {
+                $notificacion = Notificacion::create([
+                    'id_usuario_actor' => $data['id_usuario_actor'] ?? null,
+                    'modulo' => 'proyectos',
+                    'contexto_tipo' => 'proyecto',
+                    'contexto_referencia' => $data['contexto_referencia'] ?? null,
+                    'grupo_titulo' => $data['grupo_titulo'] ?? null,
+                    'tipo' => $data['tipo'],
+                    'mensaje' => trim($data['mensaje']),
+                ]);
 
-                if ($eventKey) {
-                    $existente = Notificacion::where('event_key', $eventKey)->first();
-
-                    if ($existente) {
-                        return $existente;
-                    }
+                foreach ($idsUsuarios as $idUsuario) {
+                    NotificacionUsuario::create([
+                        'id_notificacion' => $notificacion->id_notificacion,
+                        'id_usuario' => $idUsuario,
+                        'leido_en' => null,
+                    ]);
                 }
 
-                return Notificacion::create([
-                    'id_usuario_destino' => $data['id_usuario_destino'],
-                    'id_usuario_actor' => $data['id_usuario_actor'] ?? null,
-
-                    'tipo' => $data['tipo'],
-                    'modulo' => 'proyectos',
-
-                    'titulo' => trim($data['titulo']),
-                    'contenido' => isset($data['contenido']) ? trim($data['contenido']) : null,
-
-                    'referencia_tipo' => 'project',
-                    'referencia_id' => $data['referencia_id'] ?? null,
-
-                    'data' => $data['data'] ?? null,
-                    'event_key' => $eventKey,
-
-                    'leida_en' => null,
-                ]);
+                return [
+                    'notificacion' => $notificacion,
+                    'destinatarios' => $idsUsuarios,
+                ];
             });
 
             return [
                 'status' => true,
                 'message' => 'Notificación de proyecto guardada correctamente',
-                'notificacion' => $notificacion,
+                'notificacion' => $resultado['notificacion'],
+                'creadas' => [$resultado['notificacion']],
+                'destinatarios' => $resultado['destinatarios'],
+                'errores' => [],
             ];
         } catch (QueryException $e) {
-            if (($data['event_key'] ?? null) && $this->esErrorDuplicado($e)) {
-                return [
-                    'status' => true,
-                    'message' => 'La notificación ya existe',
-                    'notificacion' => Notificacion::where('event_key', $data['event_key'])->first(),
-                ];
-            }
-
             return [
                 'status' => false,
                 'message' => 'Error al guardar la notificación de proyecto',
-                'error' => $e->getMessage(),
+                'creadas' => [],
+                'errores' => [
+                    [
+                        'message' => $e->getMessage(),
+                    ],
+                ],
             ];
         } catch (\Throwable $e) {
             return [
                 'status' => false,
                 'message' => 'Error al guardar la notificación de proyecto',
-                'error' => $e->getMessage(),
+                'creadas' => [],
+                'errores' => [
+                    [
+                        'message' => $e->getMessage(),
+                    ],
+                ],
             ];
         }
     }
 
     /**
-     * Guarda una notificación para varios usuarios
-     */
-    private function crearParaUsuarios(Collection $usuarios, array $data): array
-    {
-        $creadas = [];
-        $errores = [];
-
-        foreach ($usuarios as $usuario) {
-            $idUsuarioDestino = (int) ($usuario->id_usuario ?? $usuario);
-
-            if ($idUsuarioDestino <= 0) {
-                continue;
-            }
-
-            $eventKeyBase = $data['event_key_base'] ?? null;
-
-            $resultado = $this->crear([
-                'id_usuario_destino' => $idUsuarioDestino,
-                'id_usuario_actor' => $data['id_usuario_actor'] ?? null,
-
-                'tipo' => $data['tipo'],
-                'titulo' => $data['titulo'],
-                'contenido' => $data['contenido'] ?? null,
-
-                'referencia_id' => $data['referencia_id'] ?? null,
-                'data' => $data['data'] ?? null,
-
-                'event_key' => $eventKeyBase
-                    ? $eventKeyBase . ':user_' . $idUsuarioDestino
-                    : null,
-            ]);
-
-            if ($resultado['status']) {
-                $creadas[] = $resultado['notificacion'] ?? null;
-            } else {
-                $errores[] = [
-                    'id_usuario_destino' => $idUsuarioDestino,
-                    'message' => $resultado['message'] ?? 'Error al guardar notificación',
-                ];
-            }
-        }
-
-        return [
-            'status' => empty($errores),
-            'message' => empty($errores)
-                ? 'Notificaciones de proyecto guardadas correctamente'
-                : 'Algunas notificaciones de proyecto no pudieron guardarse',
-            'creadas' => array_filter($creadas),
-            'errores' => $errores,
-        ];
-    }
-
-    /**
      * Valida los datos básicos de una notificación
      */
-    private function validarDatos(array $data): array
+    private function validarDatos(array $data, Collection $idsUsuarios): array
     {
-        foreach (['id_usuario_destino', 'tipo', 'titulo'] as $campo) {
+        if ($idsUsuarios->isEmpty()) {
+            return [
+                'status' => false,
+                'message' => 'Debe existir al menos un usuario destino',
+            ];
+        }
+
+        foreach (['tipo', 'mensaje'] as $campo) {
             if (!isset($data[$campo]) || trim((string) $data[$campo]) === '') {
                 return [
                     'status' => false,
@@ -441,14 +462,30 @@ class ProyectoNotificacionGuardadoService
             }
         }
 
-        if (mb_strlen(trim($data['titulo'])) > 50) {
+        if (isset($data['grupo_titulo']) && mb_strlen(trim($data['grupo_titulo'])) > 150) {
             return [
                 'status' => false,
-                'message' => 'El título no puede superar los 50 caracteres',
+                'message' => 'El grupo_titulo no puede superar los 150 caracteres',
             ];
         }
 
         return ['status' => true];
+    }
+
+    /**
+     * Normaliza una colección de usuarios u objetos a IDs únicos
+     */
+    private function normalizarIdsUsuarios(Collection $usuarios): Collection
+    {
+        return $usuarios
+            ->map(function ($usuario) {
+                return (int) ($usuario->id_usuario ?? $usuario);
+            })
+            ->filter(function (int $idUsuario) {
+                return $idUsuario > 0;
+            })
+            ->unique()
+            ->values();
     }
 
     /**
@@ -491,18 +528,50 @@ class ProyectoNotificacionGuardadoService
     /**
      * Obtiene propietarios activos del proyecto
      */
-    private function obtenerPropietariosActivos(int $idProyecto, array $excluirUsuarios = []): Collection
+    /*private function obtenerPropietariosActivos(int $idProyecto, array $excluirUsuarios = []): Collection
     {
-        return DB::table('participaciones')
-            ->where('id_proyecto', $idProyecto)
-            ->whereRaw('es_propietario = TRUE')
-            ->whereNull('deleted_at')
+        return DB::table('participaciones as p')
+            ->join('participacion_repositorios as pr', 'pr.id_participacion', '=', 'p.id_participacion')
+            ->where('p.id_proyecto', $idProyecto)
+            ->where('pr.es_propietario', true)
+            ->where('pr.validado', true)
+            ->whereNull('p.deleted_at')
             ->when(!empty($excluirUsuarios), function ($query) use ($excluirUsuarios) {
-                $query->whereNotIn('id_usuario', $excluirUsuarios);
+                $query->whereNotIn('p.id_usuario', $excluirUsuarios);
             })
-            ->select('id_usuario')
+            ->select('p.id_usuario')
             ->distinct()
             ->get();
+    }*/
+    /**
+ * Obtiene propietarios activos del proyecto
+ */
+    private function obtenerPropietariosActivos(int $idProyecto, array $excluirUsuarios = []): Collection
+    {
+        return DB::table('participaciones as p')
+            ->where('p.id_proyecto', $idProyecto)
+            ->where('p.es_propietario', true)
+            ->whereNull('p.deleted_at')
+            ->when(!empty($excluirUsuarios), function ($query) use ($excluirUsuarios) {
+                $query->whereNotIn('p.id_usuario', $excluirUsuarios);
+            })
+            ->select('p.id_usuario')
+            ->distinct()
+            ->get();
+    }
+
+    /**
+     * Verifica si el proyecto tiene 10 miembros activos o menos
+     */
+    private function proyectoTieneGrupoPequeno(int $idProyecto): bool
+    {
+        $total = DB::table('participaciones')
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->distinct()
+            ->count('id_usuario');
+
+        return $total <= 10;
     }
 
     /**
@@ -517,6 +586,8 @@ class ProyectoNotificacionGuardadoService
             'estado_publicacion',
             'estado_desarrollo',
             'url_repositorios',
+            'url_demo',
+            'url_videos',
             'tecnologias',
             'etiquetas',
         ];
@@ -531,16 +602,57 @@ class ProyectoNotificacionGuardadoService
     }
 
     /**
-     * Detecta error por índice unique
+     * Une varios resultados de creación en una sola respuesta
      */
-    private function esErrorDuplicado(QueryException $e): bool
+    private function combinarResultados(array $resultados): array
     {
-        $message = $e->getMessage();
+        $creadas = [];
+        $errores = [];
+        $destinatarios = [];
 
-        return str_contains($message, 'Duplicate')
-            || str_contains($message, 'duplicate')
-            || str_contains($message, 'unique')
-            || str_contains($message, 'UNIQUE');
+        foreach ($resultados as $resultado) {
+            foreach (($resultado['creadas'] ?? []) as $notificacion) {
+                if ($notificacion) {
+                    $creadas[] = $notificacion;
+                }
+            }
+
+            foreach (($resultado['errores'] ?? []) as $error) {
+                $errores[] = $error;
+            }
+
+            foreach (($resultado['destinatarios'] ?? []) as $idUsuario) {
+                $destinatarios[] = $idUsuario;
+            }
+        }
+
+        return [
+            'status' => empty($errores),
+            'message' => empty($errores)
+                ? 'Notificaciones de proyecto guardadas correctamente'
+                : 'Algunas notificaciones de proyecto no pudieron guardarse',
+            'creadas' => $creadas,
+            'destinatarios' => array_values(array_unique($destinatarios)),
+            'errores' => $errores,
+        ];
+    }
+
+
+    /**
+     * Obtiene solo el nombre de un usuario
+     */
+    private function obtenerNombreUsuario(int $idUsuario): string
+    {
+        $usuario = DB::table('usuarios')
+            ->where('id_usuario', $idUsuario)
+            ->select('nombre')
+            ->first();
+
+        if (!$usuario) {
+            return 'Un participante';
+        }
+
+        return trim($usuario->nombre);
     }
 
     /**
@@ -552,6 +664,7 @@ class ProyectoNotificacionGuardadoService
             'status' => true,
             'message' => $message,
             'creadas' => [],
+            'destinatarios' => [],
             'errores' => [],
         ];
     }
