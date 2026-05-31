@@ -8,7 +8,7 @@ return new class extends Migration
     public function up(): void
     {
         DB::statement("ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_rol_check");
-        DB::statement("ALTER TABLE usuarios ADD CONSTRAINT usuarios_rol_check CHECK (rol IN ('admin', 'usuario', 'otro'))");
+        DB::statement("ALTER TABLE usuarios ADD CONSTRAINT usuarios_rol_check CHECK (rol IN ('admin', 'usuario', 'otro', 'publicante'))");
 
         DB::statement("ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_estado_check");
         DB::statement("ALTER TABLE usuarios ADD CONSTRAINT usuarios_estado_check CHECK (estado IN ('activo', 'bloqueado', 'inactivo', 'pausado'))");
