@@ -86,4 +86,9 @@ class Usuario extends Authenticatable
     {
         return $this->hasMany(Notificacion::class, 'id_usuario_actor', 'id_usuario');
     }
+
+    public function eventosPersonales()
+    {
+        return $this->hasMany(EventoPersonal::class, 'usuario_id', 'id_usuario');
+    }
 }

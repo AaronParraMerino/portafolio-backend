@@ -7,6 +7,8 @@ use App\Http\Controllers\Api\UsuarioController;
 
 Route::middleware(['auth:sanctum', 'account.writable'])->prefix('usuarios')->group(function () {
     Route::get('/', [UsuarioController::class, 'index']);
+    Route::get('/preferencia-idioma', [UsuarioController::class, 'preferenciaIdioma']);
+    Route::patch('/preferencia-idioma', [UsuarioController::class, 'actualizarPreferenciaIdioma']);
     Route::get('/{id}', [UsuarioController::class, 'show']);
     Route::post('/', [UsuarioController::class, 'store']);
     Route::put('/{id}', [UsuarioController::class, 'update']);
