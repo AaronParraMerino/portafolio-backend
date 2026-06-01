@@ -20,6 +20,8 @@ class AdminEvento extends Model
         'fecha_fin',
         'programado_para',
         'ubicacion',
+        'imagen_portada_path',
+        'imagen_portada_url',
         'cupo',
         'inscritos',
         'interesados',
@@ -47,5 +49,20 @@ class AdminEvento extends Model
     public function comunicaciones()
     {
         return $this->hasMany(AdminEventoComunicacion::class, 'evento_id', 'id_evento');
+    }
+
+    public function creador()
+    {
+        return $this->belongsTo(Usuario::class, 'usuario_creador_id', 'id_usuario');
+    }
+
+    public function actualizador()
+    {
+        return $this->belongsTo(Usuario::class, 'usuario_actualizador_id', 'id_usuario');
+    }
+
+    public function accionesAdmin()
+    {
+        return $this->hasMany(AdminEventoAccion::class, 'evento_id', 'id_evento');
     }
 }
