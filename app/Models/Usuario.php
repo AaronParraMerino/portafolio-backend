@@ -91,4 +91,14 @@ class Usuario extends Authenticatable
     {
         return $this->hasMany(EventoPersonal::class, 'usuario_id', 'id_usuario');
     }
+
+    public function eventosPublicados()
+    {
+        return $this->hasMany(AdminEvento::class, 'usuario_creador_id', 'id_usuario');
+    }
+
+    public function solicitudesPublicante()
+    {
+        return $this->hasMany(SolicitudPublicante::class, 'usuario_id', 'id_usuario');
+    }
 }
