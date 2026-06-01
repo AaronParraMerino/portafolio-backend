@@ -7,7 +7,7 @@ use App\Models\Notificacion;
 use App\Models\SesionBase;
 use App\Models\Usuario;
 use App\Services\api\SeccionService;
-use App\Services\api\AdminNotificationGuardadoService;
+use App\Services\api\AdminNotificacionGuardadoService;
 use App\Services\api\ProfileImageVariantService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\JsonResponse;
@@ -22,7 +22,7 @@ class UsuarioController extends Controller
     public function __construct(
         private readonly SeccionService $seccionService,
         private readonly UsuarioService $usuarioService,
-        private readonly AdminNotificationGuardadoService $adminNotificationGuardadoService,
+        private readonly AdminNotificacionGuardadoService $adminNotificationGuardadoService,
         private readonly ?ProfileImageVariantService $profileImageVariants = null
     ) {
     }
