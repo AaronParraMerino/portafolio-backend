@@ -18,7 +18,8 @@ class AdminEventoService
     public const MONTHLY_EVENT_LIMIT = 3;
 
     public function __construct(
-        private readonly NotificacionService $notificacionService
+        private readonly AdminNotificacionGuardadoService $adminNotificacionGuardadoService,
+        private readonly ProfileImageVariantService $profileImageVariants
     ) {
     }
 
@@ -40,7 +41,10 @@ class AdminEventoService
     public function publisherRequests()
     {
         return SolicitudPublicante::query()
-            ->with('usuario:id_usuario,nombre,apellido,correo,telefono,rol')
+            ->with([
+                'usuario:id_usuario,nombre,apellido,correo,telefono,rol',
+                'usuario.perfil:id_perfil,usuario_id,foto_perfil',
+            ])
             ->orderByRaw("CASE estado WHEN 'pendiente' THEN 0 WHEN 'aprobada' THEN 1 ELSE 2 END")
             ->orderByDesc('created_at')
             ->get()
@@ -92,7 +96,10 @@ class AdminEventoService
                 ['solicitud_id' => $request->id_solicitud]
             );
 
-            return $request->fresh()->load('usuario:id_usuario,nombre,apellido,correo,telefono,rol');
+            return $request->fresh()->load([
+                'usuario:id_usuario,nombre,apellido,correo,telefono,rol',
+                'usuario.perfil:id_perfil,usuario_id,foto_perfil',
+            ]);
         });
     }
 
@@ -136,7 +143,10 @@ class AdminEventoService
                 ['usuario_id' => $request->usuario_id]
             );
 
-            return $request->fresh()->load('usuario:id_usuario,nombre,apellido,correo,telefono,rol');
+            return $request->fresh()->load([
+                'usuario:id_usuario,nombre,apellido,correo,telefono,rol',
+                'usuario.perfil:id_perfil,usuario_id,foto_perfil',
+            ]);
         });
     }
 
@@ -178,7 +188,10 @@ class AdminEventoService
                 ['usuario_id' => $request->usuario_id]
             );
 
-            return $request->fresh()->load('usuario:id_usuario,nombre,apellido,correo,telefono,rol');
+            return $request->fresh()->load([
+                'usuario:id_usuario,nombre,apellido,correo,telefono,rol',
+                'usuario.perfil:id_perfil,usuario_id,foto_perfil',
+            ]);
         });
     }
 
@@ -347,18 +360,34 @@ class AdminEventoService
     public function formatPublisherRequest(SolicitudPublicante $request): array
     {
         $user = $request->usuario;
+        $avatarUrl = $this->profileImageVariants->getVariantUrl($user?->perfil?->foto_perfil, 'thumb')
+            ?? $user?->perfil?->foto_perfil;
+        $fullName = $user ? trim($user->nombre.' '.$user->apellido) : 'Usuario sin nombre';
 
         return [
             'id' => $request->id_solicitud,
             'id_solicitud' => $request->id_solicitud,
             'userId' => $request->usuario_id,
             'usuario_id' => $request->usuario_id,
-            'name' => $user ? trim($user->nombre.' '.$user->apellido) : 'Usuario sin nombre',
-            'nombre' => $user ? trim($user->nombre.' '.$user->apellido) : 'Usuario sin nombre',
+            'name' => $fullName,
+            'nombre' => $fullName,
             'email' => $user?->correo ?? $request->correo_respaldo,
             'correo' => $user?->correo ?? $request->correo_respaldo,
             'phone' => $request->telefono_actual,
             'telefono' => $request->telefono_actual,
+            'fotoPerfilThumbUrl' => $avatarUrl,
+            'foto_perfil_thumb_url' => $avatarUrl,
+            'avatarUrl' => $avatarUrl,
+            'usuario' => $user ? [
+                'id' => $user->id_usuario,
+                'id_usuario' => $user->id_usuario,
+                'nombre' => $fullName,
+                'correo' => $user->correo,
+                'telefono' => $user->telefono,
+                'rol' => $user->rol,
+                'fotoPerfilThumbUrl' => $avatarUrl,
+                'foto_perfil_thumb_url' => $avatarUrl,
+            ] : null,
             'documentId' => $request->documento,
             'documento' => $request->documento,
             'organization' => $request->organizacion,
@@ -543,7 +572,7 @@ class AdminEventoService
         string $urgency,
         array $segments
     ): void {
-        $this->notificacionService->createAdminNotice($actorId, [
+        $this->adminNotificacionGuardadoService->createAdminNotice($actorId, [
             'destinatarios' => [$userId],
             'titulo' => $title,
             'contenido' => $content,

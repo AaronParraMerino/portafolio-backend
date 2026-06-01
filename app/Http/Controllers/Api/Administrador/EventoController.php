@@ -59,7 +59,10 @@ class EventoController extends Controller
             'reason' => ['required_without:motivo', 'string', 'min:5', 'max:1000'],
         ]);
         $publisherRequest = SolicitudPublicante::query()
-            ->with('usuario:id_usuario,nombre,apellido,correo,telefono,rol')
+            ->with([
+                'usuario:id_usuario,nombre,apellido,correo,telefono,rol',
+                'usuario.perfil:id_perfil,usuario_id,foto_perfil',
+            ])
             ->find($id);
 
         if (! $publisherRequest) {
@@ -93,7 +96,10 @@ class EventoController extends Controller
             'reason' => ['required_without:motivo', 'string', 'min:5', 'max:1000'],
         ]);
         $publisherRequest = SolicitudPublicante::query()
-            ->with('usuario:id_usuario,nombre,apellido,correo,telefono,rol')
+            ->with([
+                'usuario:id_usuario,nombre,apellido,correo,telefono,rol',
+                'usuario.perfil:id_perfil,usuario_id,foto_perfil',
+            ])
             ->find($id);
 
         if (! $publisherRequest) {
