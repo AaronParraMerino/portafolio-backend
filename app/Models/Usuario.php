@@ -120,4 +120,35 @@ class Usuario extends Authenticatable
         ]);
     }
     //
+
+    public function inscripcionesEventos()
+{
+    return $this->hasMany(
+        EventoInscripcion::class,
+        'usuario_id',
+        'id_usuario'
+    );
+}
+
+public function eventosInscritos()
+{
+    return $this->belongsToMany(
+        AdminEvento::class,
+        'evento_inscripciones',
+        'usuario_id',
+        'evento_id',
+        'id_usuario',
+        'id_evento'
+    )
+    ->withPivot([
+        'id_inscripcion',
+        'estado',
+        'fecha_inscripcion',
+        'fecha_desinscripcion',
+        'created_at',
+        'updated_at',
+    ])
+    ->wherePivot('estado', 'inscrito')
+    ->wherePivotNull('fecha_desinscripcion');
+}
 }
