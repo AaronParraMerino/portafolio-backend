@@ -14,6 +14,7 @@ require __DIR__.'/api/usuarios.php';
 require __DIR__.'/api/profile.php';
 require __DIR__.'/api/administrador.php';
 require __DIR__.'/api/eventos_admin.php';
+require __DIR__.'/api/publicante.php';
 
 require __DIR__.'/api/experiencias.php';
 require __DIR__.'/api/habilidades.php';
@@ -32,6 +33,10 @@ require __DIR__.'/api/busqueda.php';
 
 ##################api notificaiones##############################
 require __DIR__.'/api/notificaciones.php';
+
+##################api ver eventos##############################
+require __DIR__.'/api/eventos.php';
+
 #############################################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {

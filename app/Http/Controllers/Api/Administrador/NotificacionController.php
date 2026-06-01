@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api\Administrador;
 
 use App\Http\Controllers\Controller;
-use App\Services\api\NotificacionService;
+use App\Services\api\AdminNotificacionGuardadoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -11,7 +11,7 @@ use Illuminate\Validation\Rule;
 class NotificacionController extends Controller
 {
     public function __construct(
-        private readonly NotificacionService $notificacionService
+        private readonly AdminNotificacionGuardadoService $adminNotificacionGuardadoService
     ) {
     }
 
@@ -51,7 +51,7 @@ class NotificacionController extends Controller
         ]);
 
         return response()->json(
-            $this->notificacionService->createAdminNotice(
+            $this->adminNotificacionGuardadoService->createAdminNotice(
                 (int) $request->user()->id_usuario,
                 $data
             ),
