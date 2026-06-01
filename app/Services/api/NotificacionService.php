@@ -2,172 +2,265 @@
 
 namespace App\Services\api;
 
-use App\Models\Notificacion;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class NotificacionService
 {
-    public function createAdminNotice(int $idUsuarioActor, array $data): array
-    {
-        $destinatarios = collect($data['destinatarios'])
-            ->map(fn ($id) => (int) $id)
-            ->unique()
-            ->values();
-        $envioId = (string) Str::uuid();
-        $canales = $data['canales'] ?? ['inapp'];
 
-        DB::transaction(function () use ($data, $destinatarios, $envioId, $idUsuarioActor, $canales): void {
-            foreach ($destinatarios as $idUsuarioDestino) {
-                Notificacion::create([
-                    'id_usuario_destino' => $idUsuarioDestino,
-                    'id_usuario_actor' => $idUsuarioActor,
-                    'tipo' => 'admin_notice_' . $data['tipo'],
-                    'modulo' => 'administracion',
-                    'titulo' => $data['titulo'],
-                    'contenido' => $data['contenido'],
-                    'data' => [
-                        'envio_id' => $envioId,
-                        'tipo_aviso' => $data['tipo'],
-                        'urgencia' => $data['urgencia'],
-                        'canales' => $canales,
-                        'segmentos' => $data['segmentos'] ?? [],
-                    ],
-                ]);
-            }
-        });
+    public function __construct(
+        private readonly EventosNotificacionGuardadoService $eventosNotificacionGuardadoService
+    ) {
+    }
+
+    private const MODULO_PROYECTOS = 'proyectos';
+    private const MODULO_EVENTOS = 'eventos';
+    private const MODULO_ADMINISTRACION = 'administracion';
+
+    /**
+     * Nivel 1 devuelve cantidad de notificaciones no leidas por modulo
+     */
+    public function obtenerResumenModulosNoLeidos(int $idUsuario): array
+    {
+
+        $this->generarNotificacionesEventosProximos($idUsuario);
+
+        $conteos = $this->consultaBaseNoLeidas($idUsuario)
+            ->select('n.modulo', DB::raw('COUNT(*) as cantidad'))
+            ->groupBy('n.modulo')
+            ->pluck('cantidad', 'modulo');
+
+        $data = collect($this->modulosBase())
+            ->map(function (array $modulo) use ($conteos) {
+                $cantidad = (int) ($conteos[$modulo['modulo']] ?? 0);
+
+                return [
+                    'modulo' => $modulo['modulo'],
+                    'titulo' => $modulo['titulo'],
+                    'cantidad' => $cantidad,
+                ];
+            })
+            ->values()
+            ->all();
 
         return [
             'status' => 'success',
-            'message' => 'Aviso enviado correctamente.',
-            'data' => [
-                'id_envio' => $envioId,
-                'titulo' => $data['titulo'],
-                'contenido' => $data['contenido'],
-                'tipo' => $data['tipo'],
-                'urgencia' => $data['urgencia'],
-                'canales' => $canales,
-                'segmentos' => $data['segmentos'] ?? [],
-                'destinatarios' => $destinatarios->count(),
-                'created_at' => now()->toISOString(),
-            ],
+            'data' => $data,
+            'total' => collect($data)->sum('cantidad'),
         ];
     }
 
-    // Obtiene las notificaciones de un usuario
-    public function getUserNotifications(int $idUsuario, array $filtros = []): array
+    /**
+     * Nivel 2 devuelve grupos no leidos de un modulo
+     */
+    public function obtenerSegundoNivelPorModulo(int $idUsuario, string $modulo): array
     {
-        $porPagina = (int) ($filtros['por_pagina'] ?? 15);
-        $porPagina = max(1, min($porPagina, 50));
+        $modulo = $this->normalizarModulo($modulo);
 
-        $query = Notificacion::query()
-            ->delUsuario($idUsuario)
-            ->with([
-                'usuarioActor:id_usuario,nombre,apellido,correo',
-            ])
-            ->when(isset($filtros['leidas']), function ($query) use ($filtros) {
-                $leidas = filter_var($filtros['leidas'], FILTER_VALIDATE_BOOLEAN);
-
-                return $leidas
-                    ? $query->leidas()
-                    : $query->pendientes();
-            })
-            ->when(!empty($filtros['modulo']), function ($query) use ($filtros) {
-                return $query->where('modulo', $filtros['modulo']);
-            })
-            ->when(!empty($filtros['tipo']), function ($query) use ($filtros) {
-                return $query->where('tipo', $filtros['tipo']);
-            })
-            ->orderByRaw('leida_en IS NULL DESC')
-            ->orderByDesc('created_at');
-
-        $notificaciones = $query->paginate($porPagina);
-
-        return [
-            'status' => 'success',
-            'data' => $notificaciones->items(),
-            'meta' => [
-                'current_page' => $notificaciones->currentPage(),
-                'per_page' => $notificaciones->perPage(),
-                'total' => $notificaciones->total(),
-                'last_page' => $notificaciones->lastPage(),
-            ],
-            'resumen' => [
-                'pendientes' => $this->countUnreadNotifications($idUsuario),
-            ],
-        ];
-    }
-
-    // Marca una notificacion como leida
-    public function markNotificationAsRead(int $idUsuario, int $idNotificacion): array
-    {
-        $notificacion = Notificacion::query()
-            ->delUsuario($idUsuario)
-            ->where('id_notificacion', $idNotificacion)
-            ->first();
-
-        if (!$notificacion) {
+        if (!$this->moduloValido($modulo)) {
             return [
-                'status' => 'not_found',
-                'message' => 'Notificacion no encontrada',
+                'status' => 'invalid_module',
+                'message' => 'Modulo no valido',
             ];
         }
 
-        $notificacion->marcarComoLeida();
+        if ($modulo === self::MODULO_ADMINISTRACION) {
+            return [
+                'status' => 'success',
+                'modulo' => $modulo,
+                'tipo_vista' => 'mensajes_directos',
+                'data' => $this->obtenerMensajesAdministracionNoLeidos($idUsuario),
+            ];
+        }
+
+        $grupos = $this->consultaBaseNoLeidas($idUsuario)
+            ->where('n.modulo', $modulo)
+            ->select(
+                'n.contexto_referencia',
+                'n.grupo_titulo',
+                DB::raw('COUNT(*) as cantidad'),
+                DB::raw('MAX(n.created_at) as ultimo_creado_en')
+            )
+            ->groupBy('n.contexto_referencia', 'n.grupo_titulo')
+            ->orderByDesc('ultimo_creado_en')
+            ->get()
+            ->map(function ($row) {
+                return [
+                    'contexto_referencia' => $row->contexto_referencia,
+                    'titulo' => $row->grupo_titulo ?: 'Sin grupo',
+                    'cantidad' => (int) $row->cantidad,
+                ];
+            })
+            ->values()
+            ->all();
+
+        return [
+            'status' => 'success',
+            'modulo' => $modulo,
+            'tipo_vista' => 'grupos',
+            'data' => $grupos,
+            'total' => collect($grupos)->sum('cantidad'),
+        ];
+    }
+
+    /**
+     * Nivel 3 devuelve mensajes individuales no leidos de un grupo
+     */
+    public function obtenerMensajesNoLeidosPorGrupo(
+        int $idUsuario,
+        string $modulo,
+        string $contextoReferencia
+    ): array {
+        $modulo = $this->normalizarModulo($modulo);
+        $contextoReferencia = trim($contextoReferencia);
+
+        if (!$this->moduloValido($modulo)) {
+            return [
+                'status' => 'invalid_module',
+                'message' => 'Modulo no valido',
+            ];
+        }
+
+        if ($contextoReferencia === '') {
+            return [
+                'status' => 'invalid_payload',
+                'message' => 'Debe enviar una referencia de grupo',
+            ];
+        }
+
+        $mensajes = $this->consultaBaseNoLeidas($idUsuario)
+            ->where('n.modulo', $modulo)
+            ->where('n.contexto_referencia', $contextoReferencia)
+            ->orderByDesc('n.created_at')
+            ->select($this->camposMensaje())
+            ->get()
+            ->map(fn ($row) => $this->formatearMensaje($row))
+            ->values()
+            ->all();
+
+        return [
+            'status' => 'success',
+            'modulo' => $modulo,
+            'contexto_referencia' => $contextoReferencia,
+            'data' => $mensajes,
+            'total' => count($mensajes),
+        ];
+    }
+
+    /**
+     * Marca una notificacion como leida para el usuario
+     */
+    public function marcarNotificacionComoLeida(int $idUsuario, int $idNotificacion): array
+    {
+        $actualizadas = DB::table('notificacion_usuario')
+            ->where('id_usuario', $idUsuario)
+            ->where('id_notificacion', $idNotificacion)
+            ->whereNull('leido_en')
+            ->update([
+                'leido_en' => now(),
+                'updated_at' => now(),
+            ]);
+
+        if ($actualizadas <= 0) {
+            return [
+                'status' => 'not_found',
+                'message' => 'Notificacion no encontrada o ya estaba leida',
+                'actualizadas' => 0,
+            ];
+        }
 
         return [
             'status' => 'success',
             'message' => 'Notificacion marcada como leida',
-            'data' => $notificacion->fresh(),
+            'actualizadas' => $actualizadas,
             'resumen' => [
-                'pendientes' => $this->countUnreadNotifications($idUsuario),
+                'pendientes' => $this->contarNoLeidas($idUsuario),
             ],
         ];
     }
 
-    // Marca varias notificaciones como leidas
-    public function markNotificationsAsRead(int $idUsuario, array $idsNotificaciones): array
-    {
-        $ids = collect($idsNotificaciones)
-            ->map(fn ($id) => (int) $id)
-            ->filter(fn ($id) => $id > 0)
-            ->unique()
-            ->values();
+    /**
+     * Marca como leidas todas las notificaciones de un grupo
+     */
+    public function marcarGrupoComoLeido(
+        int $idUsuario,
+        string $modulo,
+        string $contextoReferencia
+    ): array {
+        $modulo = $this->normalizarModulo($modulo);
+        $contextoReferencia = trim($contextoReferencia);
 
-        if ($ids->isEmpty()) {
+        if (!$this->moduloValido($modulo)) {
             return [
-                'status' => 'invalid_payload',
-                'message' => 'No se enviaron notificaciones validas',
+                'status' => 'invalid_module',
+                'message' => 'Modulo no valido',
             ];
         }
 
-        $actualizadas = Notificacion::query()
-            ->delUsuario($idUsuario)
-            ->whereIn('id_notificacion', $ids->all())
-            ->whereNull('leida_en')
-            ->update([
-                'leida_en' => now(),
-                'updated_at' => now(),
-            ]);
+        if ($contextoReferencia === '') {
+            return [
+                'status' => 'invalid_payload',
+                'message' => 'Debe enviar una referencia de grupo',
+            ];
+        }
+
+        $idsPivot = $this->consultaBaseNoLeidas($idUsuario)
+            ->where('n.modulo', $modulo)
+            ->where('n.contexto_referencia', $contextoReferencia)
+            ->pluck('nu.id_notificacion_usuario');
+
+        $actualizadas = $this->marcarPivotsComoLeidos($idsPivot);
 
         return [
             'status' => 'success',
-            'message' => 'Notificaciones marcadas como leidas',
+            'message' => 'Grupo marcado como leido',
             'actualizadas' => $actualizadas,
             'resumen' => [
-                'pendientes' => $this->countUnreadNotifications($idUsuario),
+                'pendientes' => $this->contarNoLeidas($idUsuario),
             ],
         ];
     }
 
-    // Marca todas las notificaciones como leidas
-    public function markAllNotificationsAsRead(int $idUsuario): array
+    /**
+     * Marca como leidas todas las notificaciones no leidas de un modulo
+     */
+    public function marcarModuloComoLeido(int $idUsuario, string $modulo): array
     {
-        $actualizadas = Notificacion::query()
-            ->delUsuario($idUsuario)
-            ->whereNull('leida_en')
+        $modulo = $this->normalizarModulo($modulo);
+
+        if (!$this->moduloValido($modulo)) {
+            return [
+                'status' => 'invalid_module',
+                'message' => 'Modulo no valido',
+            ];
+        }
+
+        $idsPivot = $this->consultaBaseNoLeidas($idUsuario)
+            ->where('n.modulo', $modulo)
+            ->pluck('nu.id_notificacion_usuario');
+
+        $actualizadas = $this->marcarPivotsComoLeidos($idsPivot);
+
+        return [
+            'status' => 'success',
+            'message' => 'Modulo marcado como leido',
+            'actualizadas' => $actualizadas,
+            'resumen' => [
+                'pendientes' => $this->contarNoLeidas($idUsuario),
+            ],
+        ];
+    }
+
+    /**
+     * Marca como leidas todas las notificaciones pendientes del usuario
+     */
+    public function marcarTodasComoLeidas(int $idUsuario): array
+    {
+        $actualizadas = DB::table('notificacion_usuario')
+            ->where('id_usuario', $idUsuario)
+            ->whereNull('leido_en')
             ->update([
-                'leida_en' => now(),
+                'leido_en' => now(),
                 'updated_at' => now(),
             ]);
 
@@ -181,12 +274,167 @@ class NotificacionService
         ];
     }
 
-    // Cuenta las notificaciones pendientes de un usuario
-    public function countUnreadNotifications(int $idUsuario): int
+    /**
+     * Cuenta todas las notificaciones no leidas del usuario
+     */
+    public function contarNoLeidas(int $idUsuario): int
     {
-        return Notificacion::query()
-            ->delUsuario($idUsuario)
-            ->pendientes()
+        return DB::table('notificacion_usuario')
+            ->where('id_usuario', $idUsuario)
+            ->whereNull('leido_en')
             ->count();
+    }
+
+    /**
+     * Consulta base para traer solo notificaciones no leidas del usuario
+     */
+    private function consultaBaseNoLeidas(int $idUsuario)
+    {
+        return DB::table('notificacion_usuario as nu')
+            ->join('notificaciones as n', 'n.id_notificacion', '=', 'nu.id_notificacion')
+            ->leftJoin('usuarios as actor', 'actor.id_usuario', '=', 'n.id_usuario_actor')
+            ->where('nu.id_usuario', $idUsuario)
+            ->whereNull('nu.leido_en');
+    }
+
+    /**
+     * Devuelve mensajes directos de administracion
+     */
+    private function obtenerMensajesAdministracionNoLeidos(int $idUsuario): array
+    {
+        return $this->consultaBaseNoLeidas($idUsuario)
+            ->where('n.modulo', self::MODULO_ADMINISTRACION)
+            ->orderByDesc('n.created_at')
+            ->select($this->camposMensaje())
+            ->get()
+            ->map(fn ($row) => $this->formatearMensaje($row))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Campos comunes para mensajes individuales
+     */
+    private function camposMensaje(): array
+    {
+        return [
+            'n.id_notificacion',
+            'nu.id_notificacion_usuario',
+            'n.id_usuario_actor',
+            'n.modulo',
+            'n.tipo',
+            'n.mensaje',
+            'n.contexto_referencia',
+            'n.grupo_titulo',
+            'n.created_at',
+            'actor.nombre as actor_nombre',
+            'actor.apellido as actor_apellido',
+            'actor.correo as actor_correo',
+        ];
+    }
+
+    /**
+     * Formatea una notificacion individual para el frontend
+     */
+    private function formatearMensaje(object $row): array
+    {
+        return [
+            'id_notificacion' => (int) $row->id_notificacion,
+            'id_notificacion_usuario' => (int) $row->id_notificacion_usuario,
+            'id_usuario_actor' => $row->id_usuario_actor ? (int) $row->id_usuario_actor : null,
+            'modulo' => $row->modulo,
+            'tipo' => $row->tipo,
+            'mensaje' => $row->mensaje,
+            'contexto_referencia' => $row->contexto_referencia,
+            'grupo_titulo' => $row->grupo_titulo,
+            'created_at' => $row->created_at,
+            'actor' => $row->id_usuario_actor ? [
+                'id_usuario' => (int) $row->id_usuario_actor,
+                'nombre' => trim(($row->actor_nombre ?? '') . ' ' . ($row->actor_apellido ?? '')),
+                'correo' => $row->actor_correo,
+            ] : null,
+        ];
+    }
+
+    /**
+     * Marca como leidos los registros encontrados
+     */
+    private function marcarPivotsComoLeidos(Collection $idsPivot): int
+    {
+        $ids = $idsPivot
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return 0;
+        }
+
+        return DB::table('notificacion_usuario')
+            ->whereIn('id_notificacion_usuario', $ids->all())
+            ->whereNull('leido_en')
+            ->update([
+                'leido_en' => now(),
+                'updated_at' => now(),
+            ]);
+    }
+
+    /**
+     * Modulos disponibles para el primer nivel
+     */
+    private function modulosBase(): array
+    {
+        return [
+            [
+                'modulo' => self::MODULO_PROYECTOS,
+                'titulo' => 'Proyectos',
+            ],
+            [
+                'modulo' => self::MODULO_EVENTOS,
+                'titulo' => 'Eventos',
+            ],
+            [
+                'modulo' => self::MODULO_ADMINISTRACION,
+                'titulo' => 'Administracion',
+            ],
+        ];
+    }
+
+    /**
+     * Normaliza nombres de modulo enviados por el frontend
+     */
+    private function normalizarModulo(string $modulo): string
+    {
+        $modulo = strtolower(trim($modulo));
+
+        return match ($modulo) {
+            'proyecto', 'proyectos' => self::MODULO_PROYECTOS,
+            'evento', 'eventos' => self::MODULO_EVENTOS,
+            'admin', 'administracion' => self::MODULO_ADMINISTRACION,
+            default => $modulo,
+        };
+    }
+
+    /**
+     * Valida que el modulo exista
+     */
+    private function moduloValido(string $modulo): bool
+    {
+        return in_array($modulo, [
+            self::MODULO_PROYECTOS,
+            self::MODULO_EVENTOS,
+            self::MODULO_ADMINISTRACION,
+        ], true);
+    }
+
+
+    /**
+     * Genera notificaciones personales de hoy y manana antes de mostrar
+     */
+    private function generarNotificacionesEventosProximos(int $idUsuario): void
+    {
+        $this->eventosNotificacionGuardadoService->notificarEventosPersonalesDeHoy($idUsuario);
+        $this->eventosNotificacionGuardadoService->notificarEventosPersonalesDeManana($idUsuario);
     }
 }

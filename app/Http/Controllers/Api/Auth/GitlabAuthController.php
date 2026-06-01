@@ -158,6 +158,7 @@ class GitlabAuthController extends ProviderOAuthController
         );
 
         // seccion para notificar
+        /*
         if (in_array(($result['status'] ?? null), ['success', 'linked_existing_project'], true)) {
         $idProyectoNotificacion = (int) (
             $result['id_proyecto']
@@ -173,7 +174,36 @@ class GitlabAuthController extends ProviderOAuthController
             );
         }
         }
+        */
         // fin seccion para notificar
+
+            // seccion para notificar
+            if (in_array(($result['status'] ?? null), ['success', 'linked_existing_project'], true)) {
+                $idProyectoNotificacion = (int) (
+                    $result['id_proyecto']
+                    ?? $result['existing_project_id']
+                    ?? $data['id_proyecto']
+                    ?? 0
+                );
+
+                if ($idProyectoNotificacion > 0) {
+                    if (($result['status'] ?? null) === 'linked_existing_project') {
+                        $this->proyectoNotificacionGuardadoService->notificarNuevoParticipante(
+                            idProyecto: $idProyectoNotificacion,
+                            idUsuarioNuevo: (int) $user->id_usuario,
+                            idUsuarioActor: (int) $user->id_usuario
+                        );
+                    }
+
+                    if (($result['status'] ?? null) === 'success') {
+                        $this->proyectoNotificacionGuardadoService->notificarEnlacesProyectoActualizados(
+                            idProyecto: $idProyectoNotificacion,
+                            idUsuarioActor: (int) $user->id_usuario
+                        );
+                    }
+                }
+            }
+            // fin seccion para notificar
 
         return match ($result['status'] ?? 'error') {
             'success' => response()->json($result),

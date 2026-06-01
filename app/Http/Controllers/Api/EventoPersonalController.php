@@ -7,10 +7,15 @@ use App\Services\api\EventoPersonalService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use App\Services\api\EventosNotificacionGuardadoService;
 
 class EventoPersonalController extends Controller
 {
-    public function __construct(private readonly EventoPersonalService $service)
+    public function __construct(
+        private readonly EventoPersonalService $service,
+        private readonly EventosNotificacionGuardadoService $eventosNotificacionGuardadoService
+
+        )
     {
     }
 
@@ -48,6 +53,10 @@ class EventoPersonalController extends Controller
         try {
             $evento = $this->service->create((int) $request->user()->id_usuario, $validator->validated());
 
+            // Seccion para guardar notificacion
+            $this->eventosNotificacionGuardadoService->notificarEventoCreadoPersonal($evento);
+            // Fin seccion para guardar notificacion
+
             return response()->json([
                 'message' => 'Evento creado correctamente',
                 'data' => $evento,
@@ -81,6 +90,10 @@ class EventoPersonalController extends Controller
         if (! $evento) {
             return response()->json(['message' => 'Evento no encontrado'], 404);
         }
+
+        // Sección para guardar notificación
+        $this->eventosNotificacionGuardadoService->notificarEventoActualizadoPersonal($evento);
+        // Fin sección para guardar notificación
 
         return response()->json([
             'message' => 'Evento actualizado correctamente',

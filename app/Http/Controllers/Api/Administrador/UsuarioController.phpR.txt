@@ -7,7 +7,7 @@ use App\Models\Notificacion;
 use App\Models\SesionBase;
 use App\Models\Usuario;
 use App\Services\api\SeccionService;
-use App\Services\api\AdminNotificationGuardadoService;
+use App\Services\api\NotificacionService;
 use App\Services\api\ProfileImageVariantService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\JsonResponse;
@@ -22,7 +22,7 @@ class UsuarioController extends Controller
     public function __construct(
         private readonly SeccionService $seccionService,
         private readonly UsuarioService $usuarioService,
-        private readonly AdminNotificationGuardadoService $adminNotificationGuardadoService,
+        private readonly NotificacionService $notificacionService,
         private readonly ?ProfileImageVariantService $profileImageVariants = null
     ) {
     }
@@ -97,24 +97,28 @@ class UsuarioController extends Controller
         })->values();
 
         $communications = Notificacion::query()
-            ->withCount('notificacionUsuarios as destinatarios_count')
             ->where('modulo', 'administracion')
             ->where('tipo', 'like', 'admin_notice_%')
             ->orderByDesc('created_at')
             ->limit(1000)
             ->get()
-            ->map(function (Notificacion $notice): array {
+            ->groupBy(fn (Notificacion $notice) => $notice->data['envio_id'] ?? (string) $notice->id_notificacion)
+            ->map(function ($notices): array {
+                /** @var Notificacion $notice */
+                $notice = $notices->first();
+                $data = $notice->data ?? [];
+
                 return [
-                    'id' => $notice->contexto_referencia ?? $notice->id_notificacion,
-                    'titulo' => $notice->grupo_titulo ?? 'Administracion',
-                    'cuerpo' => $notice->mensaje,
-                    'tipo' => str_replace('admin_notice_', '', $notice->tipo),
+                    'id' => $data['envio_id'] ?? $notice->id_notificacion,
+                    'titulo' => $notice->titulo,
+                    'cuerpo' => $notice->contenido,
+                    'tipo' => $data['tipo_aviso'] ?? 'sistema',
                     'estado' => 'enviado',
-                    'urgencia' => 'baja',
-                    'destinatarios' => (int) $notice->destinatarios_count,
+                    'urgencia' => $data['urgencia'] ?? 'baja',
+                    'destinatarios' => $notices->count(),
                     'creado' => $notice->created_at?->format('d/m/Y H:i'),
-                    'segmentos' => [],
-                    'canales' => ['inapp'],
+                    'segmentos' => $data['segmentos'] ?? [],
+                    'canales' => $data['canales'] ?? ['inapp'],
                 ];
             })
             ->values();
@@ -166,11 +170,12 @@ class UsuarioController extends Controller
         $this->usuarioService->activate($usuario);
 
         if (in_array('inapp', $canales, true)) {
-            $this->adminNotificationGuardadoService->createAdminNotice(
+            $this->notificacionService->createAdminNotice(
                 (int) $request->user()->id_usuario,
                 [
                     'destinatarios' => [$usuario->id_usuario],
-                    'mensaje' => $mensaje,
+                    'titulo' => 'Cuenta activada',
+                    'contenido' => $mensaje,
                     'tipo' => 'cuenta',
                     'urgencia' => 'media',
                     'canales' => $canales,
@@ -239,11 +244,12 @@ class UsuarioController extends Controller
         $this->usuarioService->delete($usuario);
 
         if (in_array('inapp', $canales, true)) {
-            $this->adminNotificationGuardadoService->createAdminNotice(
+            $this->notificacionService->createAdminNotice(
                 (int) $request->user()->id_usuario,
                 [
                     'destinatarios' => [$usuario->id_usuario],
-                    'mensaje' => $razon,
+                    'titulo' => 'Cuenta inactivada',
+                    'contenido' => $razon,
                     'tipo' => 'cuenta',
                     'urgencia' => 'alta',
                     'canales' => $canales,
@@ -315,11 +321,12 @@ class UsuarioController extends Controller
             ?: 'Tu cuenta fue puesta en pausa por administracion. Durante este periodo solo puedes consultar tu informacion.';
 
         $this->usuarioService->pause($usuario);
-        $this->adminNotificationGuardadoService->createAdminNotice(
+        $this->notificacionService->createAdminNotice(
             (int) $request->user()->id_usuario,
             [
                 'destinatarios' => [$usuario->id_usuario],
-                'mensaje' => $razon,
+                'titulo' => 'Cuenta en pausa',
+                'contenido' => $razon,
                 'tipo' => 'cuenta',
                 'urgencia' => 'media',
                 'canales' => ['inapp'],
@@ -362,11 +369,12 @@ class UsuarioController extends Controller
             ?: 'Tu cuenta fue bloqueada por administracion. Contacta al equipo de soporte para mas informacion.';
 
         $this->usuarioService->block($usuario);
-        $this->adminNotificationGuardadoService->createAdminNotice(
+        $this->notificacionService->createAdminNotice(
             (int) $request->user()->id_usuario,
             [
                 'destinatarios' => [$usuario->id_usuario],
-                'mensaje' => $razon,
+                'titulo' => 'Cuenta bloqueada',
+                'contenido' => $razon,
                 'tipo' => 'seguridad',
                 'urgencia' => 'alta',
                 'canales' => ['inapp'],
