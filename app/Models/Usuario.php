@@ -76,14 +76,23 @@ class Usuario extends Authenticatable
     {
         return $this->hasOne(PersonalizacionPortafolio::class, 'usuario_id', 'id_usuario');
     }
-    
+
     public function eventosPersonales()
     {
         return $this->hasMany(EventoPersonal::class, 'usuario_id', 'id_usuario');
     }
 
+    public function eventosPublicados()
+    {
+        return $this->hasMany(AdminEvento::class, 'usuario_creador_id', 'id_usuario');
+    }
 
-    /// notificaciones relacionadas al usuario, tanto generadas por el usuario como recibidas
+    public function solicitudesPublicante()
+    {
+        return $this->hasMany(SolicitudPublicante::class, 'usuario_id', 'id_usuario');
+    }
+
+// notificaciones relacionadas al usuario, tanto generadas por el usuario como recibidas
     public function notificacionUsuarios()
     {
         return $this->hasMany(
@@ -110,5 +119,5 @@ class Usuario extends Authenticatable
             'updated_at',
         ]);
     }
-    ///
+    //
 }
