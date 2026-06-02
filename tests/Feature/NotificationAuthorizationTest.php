@@ -17,6 +17,9 @@ class NotificationAuthorizationTest extends TestCase
         $service->shouldNotReceive('obtenerSegundoNivelPorModulo');
         $service->shouldNotReceive('obtenerMensajesNoLeidosPorGrupo');
         $service->shouldNotReceive('obtenerNotificacionesLeidas');
+        $service->shouldNotReceive('obtenerResumenModulosLeidos');
+        $service->shouldNotReceive('obtenerSegundoNivelLeidasPorModulo');
+        $service->shouldNotReceive('obtenerMensajesLeidosPorGrupo');
         $service->shouldNotReceive('marcarNotificacionComoLeida');
         $service->shouldNotReceive('marcarNotificacionComoNoLeida');
         $service->shouldNotReceive('marcarGrupoComoLeido');
@@ -33,6 +36,9 @@ class NotificationAuthorizationTest extends TestCase
             $controller->segundoNivel($request, 20, 'proyectos'),
             $controller->mensajesGrupo($request, 20, 'proyectos', 'proyecto_1'),
             $controller->readNotifications($request, 20),
+            $controller->readModules($request, 20),
+            $controller->readSecondLevel($request, 20, 'proyectos'),
+            $controller->readGroupMessages($request, 20, 'proyectos', 'proyecto_1'),
             $controller->markAsRead($request, 20, 1),
             $controller->markAsUnread($request, 20, 1),
             $controller->markGroupAsRead($request, 20),

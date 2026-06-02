@@ -219,6 +219,75 @@ class NotificationController extends Controller
     }
 
     /**
+     * Obtiene el resumen de modulos con cantidad de leidas
+     */
+    public function readModules(Request $request, int $userId): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        return response()->json(
+            $this->service->obtenerResumenModulosLeidos($userId)
+        );
+    }
+
+    /**
+     * Obtiene el segundo nivel de leidas por modulo
+     */
+    public function readSecondLevel(Request $request, int $userId, string $modulo): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'por_pagina' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $response = $this->service->obtenerSegundoNivelLeidasPorModulo(
+            $userId,
+            $modulo,
+            (int) ($data['por_pagina'] ?? 20)
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
+    }
+
+    /**
+     * Obtiene los mensajes leidos de un grupo
+     */
+    public function readGroupMessages(
+        Request $request,
+        int $userId,
+        string $modulo,
+        string $contextoReferencia
+    ): JsonResponse {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'por_pagina' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $response = $this->service->obtenerMensajesLeidosPorGrupo(
+            $userId,
+            $modulo,
+            $contextoReferencia,
+            (int) ($data['por_pagina'] ?? 20)
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
+    }
+
+    /**
      * Rechaza acceso a notificaciones de otro usuario
      */
     private function rejectOtherUser(Request $request, int $userId): ?JsonResponse

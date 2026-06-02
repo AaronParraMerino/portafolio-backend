@@ -397,6 +397,160 @@ class NotificacionService
     }
 
     /**
+     * Nivel 1 devuelve cantidad de notificaciones leidas por modulo
+     */
+    public function obtenerResumenModulosLeidos(int $idUsuario): array
+    {
+        $conteos = $this->consultaBaseLeidas($idUsuario)
+            ->select('n.modulo', DB::raw('COUNT(*) as cantidad'))
+            ->groupBy('n.modulo')
+            ->pluck('cantidad', 'modulo');
+
+        $data = collect($this->modulosBase())
+            ->map(function (array $modulo) use ($conteos) {
+                $cantidad = (int) ($conteos[$modulo['modulo']] ?? 0);
+
+                return [
+                    'modulo' => $modulo['modulo'],
+                    'titulo' => $modulo['titulo'],
+                    'cantidad' => $cantidad,
+                ];
+            })
+            ->values()
+            ->all();
+
+        return [
+            'status' => 'success',
+            'data' => $data,
+            'total' => collect($data)->sum('cantidad'),
+            'resumen' => [
+                'pendientes' => $this->contarNoLeidas($idUsuario),
+            ],
+        ];
+    }
+
+    /**
+     * Nivel 2 devuelve grupos leidos o mensajes directos leidos de un modulo
+     */
+    public function obtenerSegundoNivelLeidasPorModulo(
+        int $idUsuario,
+        string $modulo,
+        int $porPagina = 20
+    ): array {
+        $modulo = $this->normalizarModulo($modulo);
+
+        if (!$this->moduloValido($modulo)) {
+            return [
+                'status' => 'invalid_module',
+                'message' => 'Modulo no valido',
+            ];
+        }
+
+        if ($modulo === self::MODULO_ADMINISTRACION) {
+            $query = $this->consultaBaseLeidas($idUsuario)
+                ->where('n.modulo', self::MODULO_ADMINISTRACION)
+                ->orderByDesc('nu.leido_en')
+                ->orderByDesc('n.created_at')
+                ->select($this->camposMensaje());
+
+            $response = $this->paginarMensajes($query, $porPagina);
+
+            return [
+                'status' => 'success',
+                'modulo' => $modulo,
+                'tipo_vista' => 'mensajes_directos',
+                'data' => $response['data'],
+                'meta' => $response['meta'],
+                'resumen' => [
+                    'pendientes' => $this->contarNoLeidas($idUsuario),
+                ],
+            ];
+        }
+
+        $grupos = $this->consultaBaseLeidas($idUsuario)
+            ->where('n.modulo', $modulo)
+            ->select(
+                'n.contexto_referencia',
+                'n.grupo_titulo',
+                DB::raw('COUNT(*) as cantidad'),
+                DB::raw('MAX(nu.leido_en) as ultimo_leido_en'),
+                DB::raw('MAX(n.created_at) as ultimo_creado_en')
+            )
+            ->groupBy('n.contexto_referencia', 'n.grupo_titulo')
+            ->orderByDesc('ultimo_leido_en')
+            ->orderByDesc('ultimo_creado_en')
+            ->get()
+            ->map(function ($row) {
+                return [
+                    'contexto_referencia' => $row->contexto_referencia,
+                    'titulo' => $row->grupo_titulo ?: 'Sin grupo',
+                    'cantidad' => (int) $row->cantidad,
+                    'ultimo_leido_en' => $row->ultimo_leido_en,
+                ];
+            })
+            ->values()
+            ->all();
+
+        return [
+            'status' => 'success',
+            'modulo' => $modulo,
+            'tipo_vista' => 'grupos',
+            'data' => $grupos,
+            'total' => collect($grupos)->sum('cantidad'),
+            'resumen' => [
+                'pendientes' => $this->contarNoLeidas($idUsuario),
+            ],
+        ];
+    }
+
+    /**
+     * Nivel 3 devuelve mensajes individuales leidos de un grupo
+     */
+    public function obtenerMensajesLeidosPorGrupo(
+        int $idUsuario,
+        string $modulo,
+        string $contextoReferencia,
+        int $porPagina = 20
+    ): array {
+        $modulo = $this->normalizarModulo($modulo);
+        $contextoReferencia = trim($contextoReferencia);
+
+        if (!$this->moduloValido($modulo)) {
+            return [
+                'status' => 'invalid_module',
+                'message' => 'Modulo no valido',
+            ];
+        }
+
+        if ($contextoReferencia === '') {
+            return [
+                'status' => 'invalid_payload',
+                'message' => 'Debe enviar una referencia de grupo',
+            ];
+        }
+
+        $query = $this->consultaBaseLeidas($idUsuario)
+            ->where('n.modulo', $modulo)
+            ->where('n.contexto_referencia', $contextoReferencia)
+            ->orderByDesc('nu.leido_en')
+            ->orderByDesc('n.created_at')
+            ->select($this->camposMensaje());
+
+        $response = $this->paginarMensajes($query, $porPagina);
+
+        return [
+            'status' => 'success',
+            'modulo' => $modulo,
+            'contexto_referencia' => $contextoReferencia,
+            'data' => $response['data'],
+            'meta' => $response['meta'],
+            'resumen' => [
+                'pendientes' => $this->contarNoLeidas($idUsuario),
+            ],
+        ];
+    }
+
+    /**
      * Consulta base para traer solo notificaciones no leidas del usuario
      */
     private function consultaBaseNoLeidas(int $idUsuario)
@@ -497,6 +651,28 @@ class NotificacionService
             ->first();
 
         return $row ? $this->formatearMensaje($row) : null;
+    }
+
+    /**
+     * Pagina mensajes individuales manteniendo un contrato compacto para frontend
+     */
+    private function paginarMensajes($query, int $porPagina): array
+    {
+        $paginador = $query->paginate($porPagina);
+
+        return [
+            'data' => collect($paginador->items())
+                ->map(fn ($row) => $this->formatearMensaje($row))
+                ->values()
+                ->all(),
+            'meta' => [
+                'total' => $paginador->total(),
+                'per_page' => $paginador->perPage(),
+                'current_page' => $paginador->currentPage(),
+                'last_page' => $paginador->lastPage(),
+                'has_more_pages' => $paginador->hasMorePages(),
+            ],
+        ];
     }
 
     /**
