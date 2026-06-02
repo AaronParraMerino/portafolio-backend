@@ -28,7 +28,7 @@ class AdminAvisoController extends Controller
             'por_pagina' => 'nullable|integer|min:1|max:100',
             'estado' => 'nullable|in:activo,inactivo,eliminado',
             'prioridad' => 'nullable|in:baja,normal,alta,critica',
-            'tipo' => 'nullable|string|max:50',
+            'tipo' => 'nullable|string|max:80',
             'buscar' => 'nullable|string|max:150',
         ]);
 
@@ -70,7 +70,7 @@ class AdminAvisoController extends Controller
         }
 
         $request->validate([
-            'tipo' => 'required|string|max:50',
+            'tipo' => 'required|string|max:80',
             'titulo' => 'required|string|max:150',
             'mensaje' => 'required|string',
 
@@ -108,7 +108,7 @@ class AdminAvisoController extends Controller
         }
 
         $request->validate([
-            'tipo' => 'sometimes|required|string|max:50',
+            'tipo' => 'sometimes|required|string|max:80',
             'titulo' => 'sometimes|required|string|max:150',
             'mensaje' => 'sometimes|required|string',
 
