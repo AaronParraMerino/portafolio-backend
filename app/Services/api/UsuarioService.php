@@ -67,6 +67,15 @@ class UsuarioService
         ]);
     }
 
+    public function updateRole(Usuario $usuario, string $rol): Usuario
+    {
+        $usuario->update([
+            'rol' => $rol,
+        ]);
+
+        return $usuario->fresh();
+    }
+
     private function restrictAccount(Usuario $usuario, string $estado): void
     {
         DB::transaction(function () use ($usuario, $estado) {

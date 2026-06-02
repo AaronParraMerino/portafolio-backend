@@ -46,6 +46,7 @@ class NotificacionController extends Controller
                 'pausados',
                 'bloqueados',
                 'inactivos',
+                'publicantes',
                 'seleccionados',
             ])],
         ]);

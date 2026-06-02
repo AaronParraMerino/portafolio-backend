@@ -22,6 +22,13 @@ class AdminAvisoService
         Aviso::PRIORIDAD_CRITICA,
     ];
 
+    private const TIPOS = [
+        'operacional_tecnico',
+        'negocio_logistica_eventos',
+        'comunicacion_marketing_global',
+        'legal_cumplimiento',
+    ];
+
     /**
      * Lista avisos para administracion
      */
@@ -268,6 +275,13 @@ class AdminAvisoService
             ];
         }
 
+        if (!$this->tipoValido($tipo)) {
+            return [
+                'status' => 'invalid_payload',
+                'message' => 'Tipo de aviso no valido',
+            ];
+        }
+
         if ($titulo === '') {
             return [
                 'status' => 'invalid_payload',
@@ -343,6 +357,13 @@ class AdminAvisoService
                 return [
                     'status' => 'invalid_payload',
                     'message' => 'El tipo no puede estar vacio',
+                ];
+            }
+
+            if (!$this->tipoValido($tipo)) {
+                return [
+                    'status' => 'invalid_payload',
+                    'message' => 'Tipo de aviso no valido',
                 ];
             }
 
@@ -450,6 +471,11 @@ class AdminAvisoService
     private function prioridadValida(?string $prioridad): bool
     {
         return in_array($this->normalizarTexto($prioridad), self::PRIORIDADES, true);
+    }
+
+    private function tipoValido(string $tipo): bool
+    {
+        return in_array($this->normalizarTexto($tipo), self::TIPOS, true);
     }
 
     private function normalizarTexto(?string $texto): string

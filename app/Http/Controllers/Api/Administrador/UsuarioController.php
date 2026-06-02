@@ -137,6 +137,7 @@ class UsuarioController extends Controller
             'supportsBlocking' => true,
             'supportsInactivation' => true,
             'supportsCommunications' => true,
+            'supportsRoleManagement' => true,
         ]);
     }
 
@@ -382,6 +383,104 @@ class UsuarioController extends Controller
                 'razon' => $razon,
                 'canales_enviados' => ['inapp'],
                 'canales_fallidos' => [],
+            ],
+        ]);
+    }
+
+    public function updateRole(Request $request, int $id): JsonResponse
+    {
+        if ($forbidden = $this->forbidNonAdmin($request)) {
+            return $forbidden;
+        }
+
+        $data = $request->validate([
+            'rol' => ['required', 'string', Rule::in(['usuario', 'publicante'])],
+            'razon' => ['required', 'string', 'min:10', 'max:1000'],
+            'canales' => ['sometimes', 'array', 'min:1'],
+            'canales.*' => ['required', 'distinct', Rule::in(['inapp', 'email'])],
+        ]);
+
+        $usuario = $this->usuarioService->findById($id);
+
+        if (! $usuario) {
+            return response()->json(['message' => 'Usuario no encontrado.'], 404);
+        }
+
+        if ($usuario->rol === 'admin') {
+            return response()->json([
+                'message' => 'El rol administrador solo puede modificarse desde base de datos.',
+            ], 422);
+        }
+
+        if ((int) $request->user()->id_usuario === (int) $usuario->id_usuario) {
+            return response()->json([
+                'message' => 'No puedes cambiar tu propio rol desde esta pantalla.',
+            ], 422);
+        }
+
+        if ($usuario->rol === $data['rol']) {
+            return response()->json([
+                'message' => 'El usuario ya tiene ese rol.',
+            ], 422);
+        }
+
+        $nextRole = $data['rol'];
+        $razon = trim((string) $data['razon']);
+        $canales = $data['canales'] ?? ['inapp', 'email'];
+        $canalesEnviados = [];
+        $canalesFallidos = [];
+
+        $usuario = $this->usuarioService->updateRole($usuario, $nextRole);
+
+        $titulo = $nextRole === 'publicante'
+            ? 'Rol publicante asignado'
+            : 'Rol publicante retirado';
+
+        if (in_array('inapp', $canales, true)) {
+            $this->adminNotificationGuardadoService->createAdminNotice(
+                (int) $request->user()->id_usuario,
+                [
+                    'destinatarios' => [$usuario->id_usuario],
+                    'mensaje' => $razon,
+                    'tipo' => 'cuenta',
+                    'urgencia' => 'media',
+                    'canales' => $canales,
+                    'segmentos' => ['seleccionados'],
+                ]
+            );
+            $canalesEnviados[] = 'inapp';
+        }
+
+        if (in_array('email', $canales, true)) {
+            try {
+                $this->sendAccountNoticeWithSendGridApi(
+                    $usuario->correo,
+                    trim($usuario->nombre.' '.$usuario->apellido),
+                    $razon,
+                    $titulo,
+                    'emails.rol_publicante_actualizado'
+                );
+                $canalesEnviados[] = 'email';
+            } catch (Throwable $exception) {
+                $canalesFallidos[] = 'email';
+                Log::warning('No se pudo enviar el correo de cambio de rol publicante.', [
+                    'id_usuario' => $usuario->id_usuario,
+                    'rol' => $nextRole,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        return response()->json([
+            'message' => empty($canalesFallidos)
+                ? 'Rol actualizado y aviso enviado correctamente.'
+                : 'Rol actualizado. No fue posible enviar todos los avisos.',
+            'data' => [
+                'id' => $usuario->id_usuario,
+                'rol' => $usuario->rol,
+                'razon' => $razon,
+                'canales_enviados' => $canalesEnviados,
+                'canales_fallidos' => $canalesFallidos,
             ],
         ]);
     }
