@@ -91,6 +91,26 @@ class NotificationController extends Controller
     }
 
     /**
+     * Marca una notificacion como no leida
+     */
+    public function markAsUnread(Request $request, int $userId, int $notificationId): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $response = $this->service->marcarNotificacionComoNoLeida(
+            $userId,
+            $notificationId
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
+    }
+
+    /**
      * Marca un grupo como leido
      */
     public function markGroupAsRead(Request $request, int $userId): JsonResponse
@@ -170,6 +190,32 @@ class NotificationController extends Controller
             'status' => 'success',
             'pendientes' => $this->service->contarNoLeidas($userId),
         ]);
+    }
+
+    /**
+     * Lista notificaciones leidas del usuario
+     */
+    public function readNotifications(Request $request, int $userId): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'modulo' => 'sometimes|string',
+            'por_pagina' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $response = $this->service->obtenerNotificacionesLeidas(
+            $userId,
+            $data['modulo'] ?? null,
+            (int) ($data['por_pagina'] ?? 20)
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
     }
 
     /**
