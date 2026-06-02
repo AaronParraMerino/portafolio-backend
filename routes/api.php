@@ -37,6 +37,10 @@ require __DIR__.'/api/notificaciones.php';
 ##################api ver eventos##############################
 require __DIR__.'/api/eventos.php';
 
+##################api avisos##############################
+require __DIR__.'/api/usuarioAvisos.php';
+require __DIR__.'/api/adminAvisos.php';
+
 #############################################################
 // Ruta de prueba para verificar la conexión
 Route::get('/ping', function () {
