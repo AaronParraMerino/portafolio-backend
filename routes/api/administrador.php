@@ -9,6 +9,7 @@ Route::prefix('administrador')->middleware('auth:sanctum')->group(function () {
     Route::patch('/usuarios/{id}/activar', [UsuarioController::class, 'activate'])->whereNumber('id');
     Route::patch('/usuarios/{id}/pausar', [UsuarioController::class, 'pause'])->whereNumber('id');
     Route::patch('/usuarios/{id}/bloquear', [UsuarioController::class, 'block'])->whereNumber('id');
+    Route::patch('/usuarios/{id}/rol', [UsuarioController::class, 'updateRole'])->whereNumber('id');
     Route::delete('/usuarios/{id}', [UsuarioController::class, 'inactivate'])->whereNumber('id');
     Route::get('/usuarios/{id}/sesiones', [UsuarioController::class, 'sessions'])->whereNumber('id');
     Route::delete('/usuarios/{id}/sesiones', [UsuarioController::class, 'closeAllSessions'])->whereNumber('id');
