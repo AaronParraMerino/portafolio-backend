@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\Api\Administrador\NotificacionController;
-use App\Services\api\NotificacionService;
+use App\Services\api\AdminNotificacionGuardadoService;
 use Illuminate\Http\Request;
 use Mockery;
 use Tests\TestCase;
@@ -12,7 +12,7 @@ class AdminNotificationAuthorizationTest extends TestCase
 {
     public function test_non_admin_cannot_send_notices_to_users(): void
     {
-        $service = Mockery::mock(NotificacionService::class);
+        $service = Mockery::mock(AdminNotificacionGuardadoService::class);
         $service->shouldNotReceive('createAdminNotice');
 
         $controller = new NotificacionController($service);

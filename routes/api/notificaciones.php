@@ -20,8 +20,23 @@ Route::prefix('notificaciones')->middleware('auth:sanctum')->group(function () {
     //Cuenta total de no leidas
     Route::get('{userId}/pendientes/count', [NotificationController::class, 'countUnread']);
 
+    //Lista notificaciones leidas
+    Route::get('{userId}/leidas', [NotificationController::class, 'readNotifications']);
+
+    //Nivel 1 modulos con cantidad de leidas
+    Route::get('{userId}/leidas/modulos', [NotificationController::class, 'readModules']);
+
+    //Nivel 2 grupos o mensajes directos leidos por modulo
+    Route::get('{userId}/leidas/modulos/{modulo}', [NotificationController::class, 'readSecondLevel']);
+
+    //Nivel 3 mensajes leidos de un grupo
+    Route::get('{userId}/leidas/modulos/{modulo}/grupos/{contextoReferencia}', [NotificationController::class, 'readGroupMessages']);
+
     //Marca una notificacion como leida
     Route::patch('{userId}/{notificationId}/read', [NotificationController::class, 'markAsRead']);
+
+    //Marca una notificacion como no leida
+    Route::patch('{userId}/{notificationId}/unread', [NotificationController::class, 'markAsUnread']);
 
     //Marca un grupo como leido
     Route::patch('{userId}/grupo/read', [NotificationController::class, 'markGroupAsRead']);

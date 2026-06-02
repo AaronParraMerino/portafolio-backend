@@ -13,20 +13,36 @@ class NotificationAuthorizationTest extends TestCase
     public function test_authenticated_user_cannot_operate_on_another_users_notifications(): void
     {
         $service = Mockery::mock(NotificacionService::class);
-        $service->shouldNotReceive('getUserNotifications');
-        $service->shouldNotReceive('markNotificationAsRead');
-        $service->shouldNotReceive('markNotificationsAsRead');
-        $service->shouldNotReceive('markAllNotificationsAsRead');
-        $service->shouldNotReceive('countUnreadNotifications');
+        $service->shouldNotReceive('obtenerResumenModulosNoLeidos');
+        $service->shouldNotReceive('obtenerSegundoNivelPorModulo');
+        $service->shouldNotReceive('obtenerMensajesNoLeidosPorGrupo');
+        $service->shouldNotReceive('obtenerNotificacionesLeidas');
+        $service->shouldNotReceive('obtenerResumenModulosLeidos');
+        $service->shouldNotReceive('obtenerSegundoNivelLeidasPorModulo');
+        $service->shouldNotReceive('obtenerMensajesLeidosPorGrupo');
+        $service->shouldNotReceive('marcarNotificacionComoLeida');
+        $service->shouldNotReceive('marcarNotificacionComoNoLeida');
+        $service->shouldNotReceive('marcarGrupoComoLeido');
+        $service->shouldNotReceive('marcarModuloComoLeido');
+        $service->shouldNotReceive('marcarTodasComoLeidas');
+        $service->shouldNotReceive('contarNoLeidas');
 
         $controller = new NotificationController($service);
         $request = Request::create('/api/notificaciones/20', 'GET');
         $request->setUserResolver(fn () => (object) ['id_usuario' => 10]);
 
         $responses = [
-            $controller->index($request, 20),
+            $controller->modulos($request, 20),
+            $controller->segundoNivel($request, 20, 'proyectos'),
+            $controller->mensajesGrupo($request, 20, 'proyectos', 'proyecto_1'),
+            $controller->readNotifications($request, 20),
+            $controller->readModules($request, 20),
+            $controller->readSecondLevel($request, 20, 'proyectos'),
+            $controller->readGroupMessages($request, 20, 'proyectos', 'proyecto_1'),
             $controller->markAsRead($request, 20, 1),
-            $controller->markManyAsRead($request, 20),
+            $controller->markAsUnread($request, 20, 1),
+            $controller->markGroupAsRead($request, 20),
+            $controller->markModuleAsRead($request, 20),
             $controller->markAllAsRead($request, 20),
             $controller->countUnread($request, 20),
         ];
