@@ -10,7 +10,9 @@ use App\Models\Usuario;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class AdminEventoService
 {
@@ -412,7 +414,7 @@ class AdminEventoService
     public function formatEvent(AdminEvento $event): array
     {
         $creator = $event->relationLoaded('creador') ? $event->creador : $event->creador()->first();
-        $imageUrl = $event->imagen_portada_url ?: ($event->imagen_portada_path ? Storage::disk('public')->url($event->imagen_portada_path) : null);
+        $imageUrl = $this->resolveCoverImageUrl($event);
 
         return [
             'id' => $event->id_evento,
@@ -643,24 +645,151 @@ class AdminEventoService
     {
         $this->deleteCoverImage($event);
 
-        $path = $image->store('eventos/portadas', 'public');
+        $upload = $this->storeCoverImageInSupabase($event, $image)
+            ?? $this->storeCoverImageLocally($image);
 
         $event->update([
-            'imagen_portada_path' => $path,
-            'imagen_portada_url' => Storage::disk('public')->url($path),
+            'imagen_portada_path' => $upload['path'],
+            'imagen_portada_url' => $upload['url'],
         ]);
     }
 
     private function deleteCoverImage(AdminEvento $event): void
     {
         if ($event->imagen_portada_path) {
-            Storage::disk('public')->delete($event->imagen_portada_path);
+            if ($this->isSupabaseCoverImage($event->imagen_portada_path, $event->imagen_portada_url)) {
+                $this->deleteCoverImageFromSupabase($event->imagen_portada_path);
+            } else {
+                Storage::disk('public')->delete($event->imagen_portada_path);
+            }
         }
 
         $event->update([
             'imagen_portada_path' => null,
             'imagen_portada_url' => null,
         ]);
+    }
+
+    private function storeCoverImageInSupabase(AdminEvento $event, UploadedFile $image): ?array
+    {
+        $bucket = trim((string) env('SUPABASE_BUCKET'), '/');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+        $key = (string) env('SUPABASE_KEY');
+
+        if ($bucket === '' || $urlBase === '' || $key === '') {
+            return null;
+        }
+
+        $extension = $image->getClientOriginalExtension() ?: $image->extension() ?: 'jpg';
+        $path = 'events/evento-' . $event->id_evento . '-' . Str::uuid() . '.' . strtolower($extension);
+        $content = file_get_contents($image->getRealPath());
+
+        if ($content === false) {
+            return null;
+        }
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $path,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $content,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'apikey: ' . $key,
+                'Content-Type: ' . ($image->getMimeType() ?: 'application/octet-stream'),
+            ],
+        ]);
+
+        curl_exec($ch);
+        $error = curl_error($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($error || $status >= 400) {
+            Log::warning('No se pudo subir la portada del evento a Supabase Storage; se usara storage local.', [
+                'evento_id' => $event->id_evento,
+                'status' => $status,
+                'error' => $error,
+            ]);
+
+            return null;
+        }
+
+        return [
+            'path' => $path,
+            'url' => $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $path,
+        ];
+    }
+
+    private function storeCoverImageLocally(UploadedFile $image): array
+    {
+        $path = $image->store('eventos/portadas', 'public');
+
+        return [
+            'path' => $path,
+            'url' => Storage::disk('public')->url($path),
+        ];
+    }
+
+    private function deleteCoverImageFromSupabase(string $path): void
+    {
+        $bucket = trim((string) env('SUPABASE_BUCKET'), '/');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+        $key = (string) env('SUPABASE_KEY');
+
+        if ($bucket === '' || $urlBase === '' || $key === '') {
+            return;
+        }
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . ltrim($path, '/'),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'DELETE',
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'apikey: ' . $key,
+            ],
+        ]);
+
+        curl_exec($ch);
+        curl_close($ch);
+    }
+
+    private function resolveCoverImageUrl(AdminEvento $event): ?string
+    {
+        if ($event->imagen_portada_url) {
+            return $event->imagen_portada_url;
+        }
+
+        if (! $event->imagen_portada_path) {
+            return null;
+        }
+
+        if ($this->isSupabaseCoverImage($event->imagen_portada_path, null)) {
+            $bucket = trim((string) env('SUPABASE_BUCKET'), '/');
+            $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+
+            if ($bucket !== '' && $urlBase !== '') {
+                return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . ltrim($event->imagen_portada_path, '/');
+            }
+        }
+
+        return Storage::disk('public')->url($event->imagen_portada_path);
+    }
+
+    private function isSupabaseCoverImage(?string $path, ?string $url): bool
+    {
+        if ($path && str_starts_with(ltrim($path, '/'), 'events/')) {
+            return true;
+        }
+
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+
+        return $url && $urlBase !== '' && str_starts_with($url, $urlBase . '/storage/v1/object/public/');
     }
 
     private function notifyUser(

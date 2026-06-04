@@ -97,6 +97,9 @@ class PublicanteEventoController extends Controller
         $titleAliasRule = $updating ? 'sometimes' : 'required_without:titulo';
         $locationRule = $updating ? 'sometimes' : 'required_without:location';
         $locationAliasRule = $updating ? 'sometimes' : 'required_without:ubicacion';
+        $statusValues = $updating
+            ? ['activo', 'programado', 'borrador', 'cancelado']
+            : ['activo', 'programado', 'borrador'];
 
         return $request->validate([
             'titulo' => [$titleRule, 'string', 'max:150'],
@@ -105,8 +108,8 @@ class PublicanteEventoController extends Controller
             'description' => ['nullable', 'string', 'max:3000'],
             'tipo' => ['sometimes', Rule::in($this->eventTypes())],
             'type' => ['sometimes', Rule::in($this->eventTypes())],
-            'estado' => ['sometimes', Rule::in(['activo', 'programado', 'borrador'])],
-            'status' => ['sometimes', Rule::in(['activo', 'programado', 'borrador'])],
+            'estado' => ['sometimes', Rule::in($statusValues)],
+            'status' => ['sometimes', Rule::in($statusValues)],
             'fecha_inicio' => ['nullable', 'date'],
             'startsAt' => ['nullable', 'date'],
             'fecha_fin' => ['nullable', 'date'],
