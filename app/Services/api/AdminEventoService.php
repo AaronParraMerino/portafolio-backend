@@ -429,6 +429,8 @@ class AdminEventoService
             'fecha_inicio' => $this->formatDateTime($event->fecha_inicio),
             'endsAt' => $this->formatDateTime($event->fecha_fin),
             'fecha_fin' => $this->formatDateTime($event->fecha_fin),
+            'sendAt' => $this->formatDateTime($event->programado_para),
+            'programado_para' => $this->formatDateTime($event->programado_para),
             'date' => $event->fecha_inicio?->format('Y-m-d'),
             'fecha' => $event->fecha_inicio?->format('Y-m-d'),
             'time' => $event->fecha_inicio?->format('H:i'),
@@ -455,8 +457,14 @@ class AdminEventoService
             ] : null,
             'communicationsCount' => 0,
             'comunicaciones' => 0,
-            'segments' => [],
-            'channels' => [],
+            'targetMode' => $event->target_mode ?? 'all_users',
+            'target_mode' => $event->target_mode ?? 'all_users',
+            'targetSelections' => $event->target_selections ?? [],
+            'target_selections' => $event->target_selections ?? [],
+            'segments' => $event->segments ?? [],
+            'segmentos' => $event->segments ?? [],
+            'channels' => $event->channels ?? [],
+            'canales' => $event->channels ?? [],
         ];
     }
 
@@ -504,15 +512,107 @@ class AdminEventoService
             'estado' => $data['estado'] ?? $data['status'] ?? 'borrador',
             'fecha_inicio' => $data['fecha_inicio'] ?? $data['startsAt'] ?? null,
             'fecha_fin' => $data['fecha_fin'] ?? $data['endsAt'] ?? null,
+            'programado_para' => $data['programado_para'] ?? $data['sendAt'] ?? null,
             'ubicacion' => $data['ubicacion'] ?? $data['location'],
             'cupo' => $data['cupo'] ?? $data['capacity'] ?? 0,
+            'target_mode' => $data['target_mode'] ?? $data['targetMode'] ?? 'all_users',
         ];
+
+        $targetSelections = $this->normalizeTargetSelections($data['targetSelections'] ?? $data['target_selections'] ?? []);
+        $payload['target_selections'] = $targetSelections;
+        $payload['segments'] = $this->buildSegments($data['segments'] ?? $data['segmentos'] ?? [], $targetSelections);
 
         if ($creating) {
             $payload['usuario_creador_id'] = $actorId;
         }
 
-        return array_filter($payload, fn ($value): bool => $value !== null);
+        return array_filter(
+            $payload,
+            fn ($value, string $key): bool => $value !== null || $key === 'programado_para',
+            ARRAY_FILTER_USE_BOTH
+        );
+    }
+
+    private function normalizeTargetSelections($value): array
+    {
+        $source = is_array($value) ? $value : [];
+
+        return [
+            'technicalSkills' => $this->normalizeStringList($source['technicalSkills'] ?? []),
+            'softSkills' => $this->normalizeStringList($source['softSkills'] ?? []),
+            'academicExperience' => $this->normalizeStringList($source['academicExperience'] ?? []),
+            'workExperience' => $this->normalizeStringList($source['workExperience'] ?? []),
+        ];
+    }
+
+    private function buildSegments($segments, array $targetSelections): array
+    {
+        if (is_array($segments) && $this->isAssociativeArray($segments)) {
+            return $segments;
+        }
+
+        $result = [
+            'habilidades' => [
+                'tecnicas' => [
+                    'items' => $targetSelections['technicalSkills'],
+                    'niveles' => [],
+                ],
+                'blandas' => [
+                    'items' => $targetSelections['softSkills'],
+                    'niveles' => [],
+                ],
+            ],
+            'experiencia' => [
+                ...array_map(
+                    fn (string $cargo): array => ['cargo' => $cargo, 'tipos' => ['academica']],
+                    $targetSelections['academicExperience']
+                ),
+                ...array_map(
+                    fn (string $cargo): array => ['cargo' => $cargo, 'tipos' => ['laboral']],
+                    $targetSelections['workExperience']
+                ),
+            ],
+        ];
+
+        return $this->removeEmptyArrays($result);
+    }
+
+    private function normalizeStringList($value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            fn ($item): string => trim((string) $item),
+            $value
+        ))));
+    }
+
+    private function isAssociativeArray(array $value): bool
+    {
+        if ($value === []) {
+            return false;
+        }
+
+        return array_keys($value) !== range(0, count($value) - 1);
+    }
+
+    private function removeEmptyArrays(array $value): array
+    {
+        $result = [];
+
+        foreach ($value as $key => $item) {
+            if (is_array($item)) {
+                $item = $this->removeEmptyArrays($item);
+            }
+
+            if ($item !== [] && $item !== null && $item !== '') {
+                $result[$key] = $item;
+            }
+        }
+
+        return $result;
     }
 
     private function parseEventStart(array $data, $fallback = null): Carbon

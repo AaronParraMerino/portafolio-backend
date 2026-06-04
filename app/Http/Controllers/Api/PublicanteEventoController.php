@@ -84,6 +84,15 @@ class PublicanteEventoController extends Controller
 
     private function validateEvent(Request $request, bool $updating = false): array
     {
+        $this->decodeJsonFields($request, [
+            'channels',
+            'canales',
+            'segments',
+            'segmentos',
+            'targetSelections',
+            'target_selections',
+        ]);
+
         $titleRule = $updating ? 'sometimes' : 'required_without:title';
         $titleAliasRule = $updating ? 'sometimes' : 'required_without:titulo';
         $locationRule = $updating ? 'sometimes' : 'required_without:location';
@@ -106,11 +115,50 @@ class PublicanteEventoController extends Controller
             'location' => [$locationAliasRule, 'string', 'max:255'],
             'cupo' => ['nullable', 'integer', 'min:0'],
             'capacity' => ['nullable', 'integer', 'min:0'],
+            'programado_para' => ['nullable', 'date'],
+            'sendAt' => ['nullable', 'date'],
+            'target_mode' => ['sometimes', Rule::in(['all_users', 'segmented'])],
+            'targetMode' => ['sometimes', Rule::in(['all_users', 'segmented'])],
+            'channels' => ['nullable', 'array'],
+            'channels.*' => ['string', 'max:40'],
+            'canales' => ['nullable', 'array'],
+            'canales.*' => ['string', 'max:40'],
+            'segments' => ['nullable', 'array'],
+            'segmentos' => ['nullable', 'array'],
+            'targetSelections' => ['nullable', 'array'],
+            'target_selections' => ['nullable', 'array'],
             'imagen_portada' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'imageFile' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'imageUrl' => ['nullable', 'string', 'max:500'],
             'imagen_url' => ['nullable', 'string', 'max:500'],
         ]);
+    }
+
+    private function decodeJsonFields(Request $request, array $fields): void
+    {
+        $decoded = [];
+
+        foreach ($fields as $field) {
+            $value = $request->input($field);
+
+            if (! is_string($value)) {
+                continue;
+            }
+
+            $trimmed = trim($value);
+            if ($trimmed === '' || ! in_array($trimmed[0], ['[', '{'], true)) {
+                continue;
+            }
+
+            $json = json_decode($trimmed, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $decoded[$field] = $json;
+            }
+        }
+
+        if (! empty($decoded)) {
+            $request->merge($decoded);
+        }
     }
 
     private function forbidNonPublisher(Request $request): ?JsonResponse
