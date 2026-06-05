@@ -91,6 +91,26 @@ class NotificationController extends Controller
     }
 
     /**
+     * Marca una notificacion como no leida
+     */
+    public function markAsUnread(Request $request, int $userId, int $notificationId): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $response = $this->service->marcarNotificacionComoNoLeida(
+            $userId,
+            $notificationId
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
+    }
+
+    /**
      * Marca un grupo como leido
      */
     public function markGroupAsRead(Request $request, int $userId): JsonResponse
@@ -170,6 +190,101 @@ class NotificationController extends Controller
             'status' => 'success',
             'pendientes' => $this->service->contarNoLeidas($userId),
         ]);
+    }
+
+    /**
+     * Lista notificaciones leidas del usuario
+     */
+    public function readNotifications(Request $request, int $userId): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'modulo' => 'sometimes|string',
+            'por_pagina' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $response = $this->service->obtenerNotificacionesLeidas(
+            $userId,
+            $data['modulo'] ?? null,
+            (int) ($data['por_pagina'] ?? 20)
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
+    }
+
+    /**
+     * Obtiene el resumen de modulos con cantidad de leidas
+     */
+    public function readModules(Request $request, int $userId): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        return response()->json(
+            $this->service->obtenerResumenModulosLeidos($userId)
+        );
+    }
+
+    /**
+     * Obtiene el segundo nivel de leidas por modulo
+     */
+    public function readSecondLevel(Request $request, int $userId, string $modulo): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'por_pagina' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $response = $this->service->obtenerSegundoNivelLeidasPorModulo(
+            $userId,
+            $modulo,
+            (int) ($data['por_pagina'] ?? 20)
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
+    }
+
+    /**
+     * Obtiene los mensajes leidos de un grupo
+     */
+    public function readGroupMessages(
+        Request $request,
+        int $userId,
+        string $modulo,
+        string $contextoReferencia
+    ): JsonResponse {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'por_pagina' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $response = $this->service->obtenerMensajesLeidosPorGrupo(
+            $userId,
+            $modulo,
+            $contextoReferencia,
+            (int) ($data['por_pagina'] ?? 20)
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
     }
 
     /**

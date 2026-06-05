@@ -533,8 +533,8 @@ class ProyectoNotificacionGuardadoService
         return DB::table('participaciones as p')
             ->join('participacion_repositorios as pr', 'pr.id_participacion', '=', 'p.id_participacion')
             ->where('p.id_proyecto', $idProyecto)
-            ->where('pr.es_propietario', true)
-            ->where('pr.validado', true)
+            ->whereRaw('pr.es_propietario IS TRUE')
+            ->whereRaw('pr.validado IS TRUE')
             ->whereNull('p.deleted_at')
             ->when(!empty($excluirUsuarios), function ($query) use ($excluirUsuarios) {
                 $query->whereNotIn('p.id_usuario', $excluirUsuarios);
@@ -550,7 +550,7 @@ class ProyectoNotificacionGuardadoService
     {
         return DB::table('participaciones as p')
             ->where('p.id_proyecto', $idProyecto)
-            ->where('p.es_propietario', true)
+            ->whereRaw('p.es_propietario IS TRUE')
             ->whereNull('p.deleted_at')
             ->when(!empty($excluirUsuarios), function ($query) use ($excluirUsuarios) {
                 $query->whereNotIn('p.id_usuario', $excluirUsuarios);
