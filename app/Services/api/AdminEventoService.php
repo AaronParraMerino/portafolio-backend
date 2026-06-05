@@ -473,34 +473,47 @@ class AdminEventoService
     private function history()
     {
         return AdminEventoHistorial::query()
+            ->with('actor:id_usuario,nombre,apellido,correo,rol')
             ->orderByDesc('created_at')
             ->orderByDesc('id_historial')
             ->limit(500)
             ->get()
-            ->map(fn (AdminEventoHistorial $item): array => [
-                'id' => $item->id_historial,
-                'id_historial' => $item->id_historial,
-                'title' => $item->titulo,
-                'titulo' => $item->titulo,
-                'description' => $item->descripcion,
-                'descripcion' => $item->descripcion,
-                'type' => $item->tipo,
-                'tipo' => $item->tipo,
-                'status' => $item->estado,
-                'estado' => $item->estado,
-                'target' => $item->destino,
-                'destino' => $item->destino,
-                'date' => $this->formatDateTime($item->created_at),
-                'fecha' => $this->formatDateTime($item->created_at),
-                'actor' => $item->metadata['actor'] ?? 'Sistema',
-                'action' => $item->accion,
-                'accion' => $item->accion,
-                'reason' => $item->descripcion,
-                'motivo' => $item->descripcion,
-                'channels' => $item->channels ?? [],
-                'canales' => $item->channels ?? [],
-                'metadata' => $item->metadata ?? [],
-            ])
+            ->map(function (AdminEventoHistorial $item): array {
+                $actorName = $item->actor
+                    ? trim($item->actor->nombre.' '.$item->actor->apellido)
+                    : ($item->metadata['actor'] ?? 'Sistema');
+
+                return [
+                    'id' => $item->id_historial,
+                    'id_historial' => $item->id_historial,
+                    'title' => $item->titulo,
+                    'titulo' => $item->titulo,
+                    'description' => $item->descripcion,
+                    'descripcion' => $item->descripcion,
+                    'type' => $item->tipo,
+                    'tipo' => $item->tipo,
+                    'status' => $item->estado,
+                    'estado' => $item->estado,
+                    'target' => $item->destino,
+                    'destino' => $item->destino,
+                    'date' => $this->formatDateTime($item->created_at),
+                    'fecha' => $this->formatDateTime($item->created_at),
+                    'actor' => $actorName ?: 'Usuario sin nombre',
+                    'actorId' => $item->usuario_actor_id,
+                    'actor_id' => $item->usuario_actor_id,
+                    'actorRole' => $item->actor?->rol,
+                    'actor_role' => $item->actor?->rol,
+                    'actorEmail' => $item->actor?->correo,
+                    'actor_email' => $item->actor?->correo,
+                    'action' => $item->accion,
+                    'accion' => $item->accion,
+                    'reason' => $item->descripcion,
+                    'motivo' => $item->descripcion,
+                    'channels' => $item->channels ?? [],
+                    'canales' => $item->channels ?? [],
+                    'metadata' => $item->metadata ?? [],
+                ];
+            })
             ->values();
     }
 
