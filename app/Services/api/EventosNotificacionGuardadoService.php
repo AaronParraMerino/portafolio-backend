@@ -98,6 +98,29 @@ class EventosNotificacionGuardadoService
     }
 
     /**
+     * Genera notificaciones de eventos personales e inscritos para hoy y mañana.
+     */
+    public function generarNotificacionesGeneralesProximas(int $idUsuario): array
+    {
+        $personalesHoy = $this->notificarEventosPersonalesDeHoy($idUsuario);
+        $personalesManana = $this->notificarEventosPersonalesDeManana($idUsuario);
+        $inscritos = $this->generarNotificacionesEventosProximos();
+
+        return [
+            'status' =>
+                ($personalesHoy['status'] ?? false) &&
+                ($personalesManana['status'] ?? false) &&
+                ($inscritos['status'] ?? false),
+            'message' => 'Proceso de notificaciones generales de eventos finalizado',
+            'personales' => [
+                'hoy' => $personalesHoy,
+                'manana' => $personalesManana,
+            ],
+            'inscritos' => $inscritos,
+        ];
+    }
+
+    /**
      * Busca eventos personales solo de hoy o el dia siguiente
      */
     private function notificarEventosPersonalesPorMomento(int $idUsuario, string $momento): array
