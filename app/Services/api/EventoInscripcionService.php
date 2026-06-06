@@ -19,13 +19,6 @@ class EventoInscripcionService
         'programado',
     ];
 
-    /**
-     * Muestra en el home solo los eventos que el usuario puede ver.
-     * Usa la segmentación guardada por el creador del evento:
-     * - target_mode
-     * - segments
-     * - target_selections
-     */
     public function ver(int $usuarioId, int $perPage = 12): LengthAwarePaginator
     {
         $eventos = $this->baseEventosQuery($usuarioId)
@@ -55,9 +48,6 @@ class EventoInscripcionService
         );
     }
 
-    /**
-     * Inscribe al usuario en un evento
-     */
     public function inscribirse(int $usuarioId, int $eventoId): array
     {
         return DB::transaction(function () use ($usuarioId, $eventoId) {
@@ -131,9 +121,6 @@ class EventoInscripcionService
         });
     }
 
-    /**
-     * Desinscribe al usuario de un evento
-     */
     public function desinscribirse(int $usuarioId, int $eventoId): array
     {
         return DB::transaction(function () use ($usuarioId, $eventoId) {
@@ -189,16 +176,14 @@ class EventoInscripcionService
             'e.ubicacion',
             'e.cupo',
             'e.inscritos',
-            'e.interesados',
-            'e.espera',
-            'e.asistieron',
-            'e.no_asistieron',
             'e.target_mode',
             'e.channels',
             'e.segments',
             'e.target_selections',
-            'e.created_at',
             'e.updated_at',
+            'uc.nombre as creador_nombre',
+            'uc.apellido as creador_apellido',
+            'uc.correo as creador_correo',
             DB::raw('CASE WHEN ei.id_inscripcion IS NULL THEN false ELSE true END AS esta_inscrito'),
             'ei.id_inscripcion',
             'ei.fecha_inscripcion',
@@ -214,6 +199,7 @@ class EventoInscripcionService
         }
 
         return DB::table('admin_eventos as e')
+            ->leftJoin('usuarios as uc', 'uc.id_usuario', '=', 'e.usuario_creador_id')
             ->leftJoin('evento_inscripciones as ei', function ($join) use ($usuarioId) {
                 $join->on('ei.evento_id', '=', 'e.id_evento')
                     ->where('ei.usuario_id', '=', $usuarioId)
@@ -234,408 +220,158 @@ class EventoInscripcionService
             return false;
         }
 
-        if ($evento->fecha_fin && Carbon::parse($evento->fecha_fin)->lt(now())) {
-            return false;
-        }
-
-        return true;
+        return !$evento->fecha_fin || Carbon::parse($evento->fecha_fin)->gte(now());
     }
 
     private function usuarioPuedeVerEvento(int $usuarioId, object $evento): bool
     {
-        $targetMode = $evento->target_mode ?? 'all_users';
+        $targetMode = $this->normalizarTexto($evento->target_mode ?? 'all_users');
 
         if ($targetMode === 'all_users') {
             return true;
         }
 
-        $targetSelections = $this->jsonToArray($evento->target_selections ?? null);
-        $segments = $this->jsonToArray($evento->segments ?? null);
-
-        $usuariosSeleccionados = $this->extraerIdsUsuarios($targetSelections);
-
-        if (!empty($usuariosSeleccionados)) {
-            return in_array($usuarioId, $usuariosSeleccionados, true);
+        if ($targetMode !== 'segmented') {
+            return false;
         }
 
-        if (!$this->tieneValores($segments)) {
-            return true;
-        }
+        $criterios = $this->criteriosSegmentacionEvento(
+            $this->jsonToArray($evento->target_selections ?? null),
+            $this->jsonToArray($evento->segments ?? null)
+        );
 
-        return $this->usuarioCumpleSegmentacion($usuarioId, $segments);
+        return $this->tieneCriterios($criterios)
+            && $this->usuarioCumpleSegmentacion($usuarioId, $criterios);
     }
 
-    private function usuarioCumpleSegmentacion(int $usuarioId, array $segments): bool
+    private function criteriosSegmentacionEvento(array $targetSelections, array $segments): array
     {
-        if (!$this->cumpleQuery($usuarioId, $segments)) {
-            return false;
-        }
-
-        if (!$this->cumpleUsuario($usuarioId, $segments)) {
-            return false;
-        }
-
-        if (!$this->cumpleHabilidades($usuarioId, $segments)) {
-            return false;
-        }
-
-        if (!$this->cumpleExperiencia($usuarioId, $segments)) {
-            return false;
-        }
-
-        if (!$this->cumpleProyectos($usuarioId, $segments)) {
-            return false;
-        }
-
-        return true;
+        return [
+            'habilidades_tecnicas' => $this->valoresUnicos(array_merge(
+                $this->normalizarLista(data_get($targetSelections, 'technicalSkills', [])),
+                $this->normalizarLista(data_get($segments, 'habilidades.tecnicas.items', []))
+            )),
+            'habilidades_blandas' => $this->valoresUnicos(array_merge(
+                $this->normalizarLista(data_get($targetSelections, 'softSkills', [])),
+                $this->normalizarLista(data_get($segments, 'habilidades.blandas.items', []))
+            )),
+            'experiencia_academica' => $this->valoresUnicosTexto(array_merge(
+                $this->listaTextoOriginal(data_get($targetSelections, 'academicExperience', [])),
+                $this->experienciasPorTipo($segments, 'academica')
+            )),
+            'experiencia_laboral' => $this->valoresUnicosTexto(array_merge(
+                $this->listaTextoOriginal(data_get($targetSelections, 'workExperience', [])),
+                $this->experienciasPorTipo($segments, 'laboral')
+            )),
+        ];
     }
 
-    private function cumpleQuery(int $usuarioId, array $segments): bool
-    {
-        $query = trim((string) data_get($segments, 'query', ''));
-
-        if ($query === '') {
-            return true;
-        }
-
-        $tokens = $this->queryTokens($query);
-
-        if (empty($tokens)) {
-            return true;
-        }
-
-        $usuario = $this->datosUsuario($usuarioId);
-
-        if (!$usuario) {
-            return false;
-        }
-
-        foreach ($tokens as $token) {
-            $like = "%{$token}%";
-
-            $coincideUsuario =
-                str_contains($this->normalizarTexto($usuario->nombre . ' ' . $usuario->apellido), $token)
-                || ($usuario->profesion_visible && str_contains($this->normalizarTexto($usuario->profesion), $token))
-                || ($usuario->ciudad_visible && str_contains($this->normalizarTexto($usuario->ciudad), $token))
-                || ($usuario->pais_visible && str_contains($this->normalizarTexto($usuario->pais), $token));
-
-            if ($coincideUsuario) {
-                return true;
-            }
-
-            if ($this->existeHabilidadPorTexto($usuarioId, $like)) {
-                return true;
-            }
-
-            if ($this->existeExperienciaPorTexto($usuarioId, $like)) {
-                return true;
-            }
-
-            if ($this->existeProyectoPorTexto($usuarioId, $like)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function cumpleUsuario(int $usuarioId, array $segments): bool
-    {
-        $filtroUsuario = data_get($segments, 'usuario', []);
-
-        if (!$this->tieneValores($filtroUsuario)) {
-            return true;
-        }
-
-        $usuario = $this->datosUsuario($usuarioId);
-
-        if (!$usuario) {
-            return false;
-        }
-
-        $nombre = trim((string) data_get($filtroUsuario, 'nombre', ''));
-
-        if ($nombre !== '') {
-            $nombreCompleto = $this->normalizarTexto($usuario->nombre . ' ' . $usuario->apellido);
-
-            if (!str_contains($nombreCompleto, $this->normalizarTexto($nombre))) {
-                return false;
-            }
-        }
-
-        $ciudades = $this->normalizarLista(data_get($filtroUsuario, 'ciudad', []));
-
-        if (!empty($ciudades)) {
-            if (!$usuario->ciudad_visible) {
-                return false;
-            }
-
-            if (!in_array($this->normalizarTexto($usuario->ciudad), $ciudades, true)) {
-                return false;
-            }
-        }
-
-        $paises = $this->normalizarLista(data_get($filtroUsuario, 'pais', []));
-
-        if (!empty($paises)) {
-            if (!$usuario->pais_visible) {
-                return false;
-            }
-
-            if (!in_array($this->normalizarTexto($usuario->pais), $paises, true)) {
-                return false;
-            }
-        }
-
-        $profesiones = $this->normalizarLista(data_get($filtroUsuario, 'profesion', []));
-
-        if (!empty($profesiones)) {
-            if (!$usuario->profesion_visible) {
-                return false;
-            }
-
-            $profesionUsuario = $this->normalizarTexto($usuario->profesion);
-
-            $cumple = collect($profesiones)
-                ->contains(fn ($profesion) => str_contains($profesionUsuario, $profesion));
-
-            if (!$cumple) {
-                return false;
-            }
-        }
-
-        $roles = $this->normalizarLista(data_get($filtroUsuario, 'rol', []));
-
-        if (!empty($roles) && !in_array($this->normalizarTexto($usuario->rol), $roles, true)) {
-            return false;
-        }
-
-        return true;
-    }
-
-    private function cumpleHabilidades(int $usuarioId, array $segments): bool
-    {
-        $habilidades = data_get($segments, 'habilidades', []);
-
-        if (!$this->tieneValores($habilidades)) {
-            return true;
-        }
-
-        $tecItems = $this->normalizarLista(data_get($habilidades, 'tecnicas.items', []));
-        $tecNiveles = $this->normalizarLista(data_get($habilidades, 'tecnicas.niveles', []));
-        $blaItems = $this->normalizarLista(data_get($habilidades, 'blandas.items', []));
-        $blaNiveles = $this->normalizarLista(data_get($habilidades, 'blandas.niveles', []));
-        $itemsGenerales = $this->normalizarLista(data_get($habilidades, 'items', []));
-
-        $hayTecnicas = !empty($tecItems) || !empty($tecNiveles);
-        $hayBlandas = !empty($blaItems) || !empty($blaNiveles);
-        $hayGenerales = !empty($itemsGenerales);
-
-        $q = DB::table('habilidades_usuario as hu')
-            ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
-            ->where('hu.usuario_id', $usuarioId)
-            ->whereRaw('hu.es_visible IS TRUE')
-            ->whereRaw('hb.estado IS TRUE');
-
-        if ($hayTecnicas || $hayBlandas) {
-            $q->where(function ($w) use ($hayTecnicas, $hayBlandas, $tecItems, $tecNiveles, $blaItems, $blaNiveles) {
-                if ($hayTecnicas) {
-                    $w->orWhere(function ($s) use ($tecItems, $tecNiveles) {
-                        $s->where('hb.tipo', 'tecnica');
-
-                        if (!empty($tecItems)) {
-                            $s->whereIn('hb.nombre_normalizado', $tecItems);
-                        }
-
-                        if (!empty($tecNiveles) && !in_array('todos', $tecNiveles, true)) {
-                            $s->whereIn(DB::raw('LOWER(hu.nivel)'), $tecNiveles);
-                        }
-                    });
-                }
-
-                if ($hayBlandas) {
-                    $w->orWhere(function ($s) use ($blaItems, $blaNiveles) {
-                        $s->where('hb.tipo', 'blanda');
-
-                        if (!empty($blaItems)) {
-                            $s->whereIn('hb.nombre_normalizado', $blaItems);
-                        }
-
-                        if (!empty($blaNiveles) && !in_array('todos', $blaNiveles, true)) {
-                            $s->whereIn(DB::raw('LOWER(hu.nivel)'), $blaNiveles);
-                        }
-                    });
-                }
-            });
-        }
-
-        if ($hayGenerales) {
-            $q->whereIn('hb.nombre_normalizado', $itemsGenerales);
-        }
-
-        return $q->exists();
-    }
-
-    private function cumpleExperiencia(int $usuarioId, array $segments): bool
+    private function experienciasPorTipo(array $segments, string $tipoBuscado): array
     {
         $experiencias = data_get($segments, 'experiencia', []);
 
-        if (!$this->tieneValores($experiencias)) {
-            return true;
+        if (!is_array($experiencias)) {
+            return [];
         }
 
-        $items = is_array($experiencias) ? $experiencias : [];
+        $resultado = [];
 
+        foreach ($experiencias as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $cargo = trim((string) data_get($item, 'cargo', ''));
+
+            if ($cargo === '') {
+                continue;
+            }
+
+            $tipos = $this->normalizarLista(data_get($item, 'tipos', []));
+
+            if (in_array($tipoBuscado, $tipos, true)) {
+                $resultado[] = $cargo;
+            }
+        }
+
+        return $resultado;
+    }
+
+    private function usuarioCumpleSegmentacion(int $usuarioId, array $criterios): bool
+    {
+        $habilidadesTecnicas = data_get($criterios, 'habilidades_tecnicas', []);
+
+        if (!empty($habilidadesTecnicas)
+            && !$this->usuarioTieneHabilidad($usuarioId, 'tecnica', $habilidadesTecnicas)) {
+            return false;
+        }
+
+        $habilidadesBlandas = data_get($criterios, 'habilidades_blandas', []);
+
+        if (!empty($habilidadesBlandas)
+            && !$this->usuarioTieneHabilidad($usuarioId, 'blanda', $habilidadesBlandas)) {
+            return false;
+        }
+
+        $experienciaAcademica = data_get($criterios, 'experiencia_academica', []);
+
+        if (!empty($experienciaAcademica)
+            && !$this->usuarioTieneExperiencia($usuarioId, $experienciaAcademica, 'academica')) {
+            return false;
+        }
+
+        $experienciaLaboral = data_get($criterios, 'experiencia_laboral', []);
+
+        if (!empty($experienciaLaboral)
+            && !$this->usuarioTieneExperiencia($usuarioId, $experienciaLaboral, 'laboral')) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function usuarioTieneHabilidad(int $usuarioId, string $tipo, array $habilidades): bool
+    {
+        return DB::table('habilidades_usuario as hu')
+            ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
+            ->where('hu.usuario_id', $usuarioId)
+            ->where('hb.tipo', $tipo)
+            ->whereRaw('hu.es_visible IS TRUE')
+            ->whereRaw('hb.estado IS TRUE')
+            ->whereIn('hb.nombre_normalizado', $habilidades)
+            ->exists();
+    }
+
+    private function usuarioTieneExperiencia(int $usuarioId, array $cargos, string $tipo): bool
+    {
         $q = DB::table('experiencias as ex')
             ->where('ex.usuario_id', $usuarioId)
-            ->whereRaw('ex.es_publico IS TRUE');
+            ->whereRaw('ex.es_publico IS TRUE')
+            ->whereRaw('LOWER(ex.tipo) = ?', [$tipo]);
 
-        $fechaDesde = $this->fechaDesde($segments);
+        $q->where(function ($w) use ($cargos) {
+            foreach ($cargos as $cargo) {
+                $cargo = trim((string) $cargo);
 
-        if ($fechaDesde) {
-            $q->whereDate('ex.fecha_inicio', '>=', $fechaDesde);
-        }
-
-        $q->where(function ($w) use ($items) {
-            foreach ($items as $item) {
-                $cargo = trim((string) data_get($item, 'cargo', ''));
-                $tipos = $this->normalizarLista(data_get($item, 'tipos', []));
-
-                if ($cargo === '' && empty($tipos)) {
-                    continue;
+                if ($cargo !== '') {
+                    $w->orWhere('ex.cargo', 'ilike', "%{$cargo}%");
                 }
-
-                $w->orWhere(function ($s) use ($cargo, $tipos) {
-                    if ($cargo !== '') {
-                        $s->where('ex.cargo', 'ilike', "%{$cargo}%");
-                    }
-
-                    if (!empty($tipos) && !in_array('ambos', $tipos, true)) {
-                        $s->whereIn(DB::raw('LOWER(ex.tipo)'), $tipos);
-                    }
-                });
             }
         });
 
         return $q->exists();
     }
 
-    private function cumpleProyectos(int $usuarioId, array $segments): bool
-    {
-        $proyectos = data_get($segments, 'proyectos', []);
-
-        if (!$this->tieneValores($proyectos)) {
-            return true;
-        }
-
-        $tecnologias = $this->normalizarLista(data_get($proyectos, 'tecnologias', []));
-
-        if (empty($tecnologias)) {
-            return true;
-        }
-
-        $q = DB::table('participaciones as par')
-            ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
-            ->join('uso_tecnologias as ut', 'ut.id_proyecto', '=', 'p.id_proyecto')
-            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
-            ->where('par.id_usuario', $usuarioId)
-            ->where('par.visibilidad', 'publico')
-            ->whereNull('par.deleted_at')
-            ->whereNull('p.deleted_at')
-            ->whereNull('ut.deleted_at')
-            ->whereRaw('ut.es_visible IS TRUE')
-            ->whereIn(DB::raw('LOWER(t.nombre)'), $tecnologias);
-
-        $fechaDesde = $this->fechaDesde($segments);
-
-        if ($fechaDesde) {
-            $q->whereDate('par.fecha_inicio', '>=', $fechaDesde);
-        }
-
-        return $q->exists();
-    }
-
-    private function datosUsuario(int $usuarioId): ?object
-    {
-        return DB::table('usuarios')
-            ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
-            ->leftJoin('visibilidad_campos as vis_profesion', function ($join) {
-                $join->on('vis_profesion.usuario_id', '=', 'usuarios.id_usuario')
-                    ->whereRaw("vis_profesion.campo = 'profesion'");
-            })
-            ->leftJoin('visibilidad_campos as vis_ciudad', function ($join) {
-                $join->on('vis_ciudad.usuario_id', '=', 'usuarios.id_usuario')
-                    ->whereRaw("vis_ciudad.campo = 'ciudad'");
-            })
-            ->leftJoin('visibilidad_campos as vis_pais', function ($join) {
-                $join->on('vis_pais.usuario_id', '=', 'usuarios.id_usuario')
-                    ->whereRaw("vis_pais.campo = 'pais'");
-            })
-            ->where('usuarios.id_usuario', $usuarioId)
-            ->whereIn('usuarios.estado', ['activo', 'pausado'])
-            ->whereRaw('perfiles.es_publico IS TRUE')
-            ->select([
-                'usuarios.id_usuario',
-                'usuarios.nombre',
-                'usuarios.apellido',
-                'usuarios.rol',
-                'usuarios.estado',
-                'perfiles.profesion',
-                'perfiles.ciudad',
-                'perfiles.pais',
-                DB::raw('COALESCE(vis_profesion.visible, false) AS profesion_visible'),
-                DB::raw('COALESCE(vis_ciudad.visible, false) AS ciudad_visible'),
-                DB::raw('COALESCE(vis_pais.visible, false) AS pais_visible'),
-            ])
-            ->first();
-    }
-
-    private function existeHabilidadPorTexto(int $usuarioId, string $like): bool
-    {
-        return DB::table('habilidades_usuario as hu')
-            ->join('habilidades as hb', 'hb.id_habilidad', '=', 'hu.habilidad_id')
-            ->where('hu.usuario_id', $usuarioId)
-            ->whereRaw('hu.es_visible IS TRUE')
-            ->whereRaw('hb.estado IS TRUE')
-            ->where(function ($q) use ($like) {
-                $q->where('hb.nombre', 'ilike', $like)
-                    ->orWhere('hb.nombre_normalizado', 'ilike', $like);
-            })
-            ->exists();
-    }
-
-    private function existeExperienciaPorTexto(int $usuarioId, string $like): bool
-    {
-        return DB::table('experiencias as ex')
-            ->where('ex.usuario_id', $usuarioId)
-            ->whereRaw('ex.es_publico IS TRUE')
-            ->where('ex.cargo', 'ilike', $like)
-            ->exists();
-    }
-
-    private function existeProyectoPorTexto(int $usuarioId, string $like): bool
-    {
-        return DB::table('participaciones as par')
-            ->join('proyectos as p', 'p.id_proyecto', '=', 'par.id_proyecto')
-            ->join('uso_tecnologias as ut', 'ut.id_proyecto', '=', 'p.id_proyecto')
-            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
-            ->where('par.id_usuario', $usuarioId)
-            ->where('par.visibilidad', 'publico')
-            ->whereNull('par.deleted_at')
-            ->whereNull('p.deleted_at')
-            ->whereNull('ut.deleted_at')
-            ->whereRaw('ut.es_visible IS TRUE')
-            ->where('t.nombre', 'ilike', $like)
-            ->exists();
-    }
-
     private function formatearEvento(object $evento): array
     {
         $cupo = (int) $evento->cupo;
         $inscritos = (int) $evento->inscritos;
+        $nombreCreador = trim((string) (($evento->creador_nombre ?? '') . ' ' . ($evento->creador_apellido ?? '')));
+        $nombreCreador = $nombreCreador !== '' ? $nombreCreador : null;
 
         $data = [
             'id_evento' => $evento->id_evento,
+            'usuario_creador_id' => $evento->usuario_creador_id,
             'titulo' => $evento->titulo,
             'descripcion' => $evento->descripcion,
             'tipo' => $evento->tipo,
@@ -654,7 +390,18 @@ class EventoInscripcionService
             'fecha_inscripcion' => $evento->fecha_inscripcion,
 
             'canales' => $this->jsonToArray($evento->channels ?? null),
+            'updated_at' => $evento->updated_at,
         ];
+
+        if ($nombreCreador !== null) {
+            $data['autor_nombre'] = $nombreCreador;
+            $data['creador'] = [
+                'id' => $evento->usuario_creador_id,
+                'id_usuario' => $evento->usuario_creador_id,
+                'nombre' => $nombreCreador,
+                'correo' => $evento->creador_correo,
+            ];
+        }
 
         if (property_exists($evento, 'imagen_portada_path')) {
             $data['imagen_portada_path'] = $evento->imagen_portada_path;
@@ -665,28 +412,6 @@ class EventoInscripcionService
         }
 
         return $data;
-    }
-
-    private function fechaDesde(array $data): ?string
-    {
-        $valor = data_get($data, 'fecha_desde')
-            ?? data_get($data, 'fechaDesde')
-            ?? data_get($data, 'desde');
-
-        if (!$valor) {
-            return null;
-        }
-
-        return Carbon::parse($valor)->toDateString();
-    }
-
-    private function queryTokens(string $query): array
-    {
-        return collect(preg_split('/\s+/', $this->normalizarTexto($query)))
-            ->filter(fn ($token) => mb_strlen($token) >= 2)
-            ->unique()
-            ->values()
-            ->toArray();
     }
 
     private function jsonToArray($json): array
@@ -704,23 +429,15 @@ class EventoInscripcionService
         return is_array($data) ? $data : [];
     }
 
-    private function tieneValores($valor): bool
+    private function tieneCriterios(array $criterios): bool
     {
-        if ($valor === null || $valor === '' || $valor === false) {
-            return false;
-        }
-
-        if (is_array($valor)) {
-            foreach ($valor as $v) {
-                if ($this->tieneValores($v)) {
-                    return true;
-                }
+        foreach ($criterios as $items) {
+            if (!empty($items)) {
+                return true;
             }
-
-            return false;
         }
 
-        return true;
+        return false;
     }
 
     private function normalizarLista($valor): array
@@ -733,39 +450,55 @@ class EventoInscripcionService
             return [$this->normalizarTexto($valor)];
         }
 
-        if (is_array($valor)) {
-            $resultado = [];
-
-            foreach ($valor as $item) {
-                if (is_array($item)) {
-                    if (isset($item['value'])) {
-                        $resultado[] = $this->normalizarTexto($item['value']);
-                        continue;
-                    }
-
-                    if (isset($item['nombre'])) {
-                        $resultado[] = $this->normalizarTexto($item['nombre']);
-                        continue;
-                    }
-
-                    if (isset($item['name'])) {
-                        $resultado[] = $this->normalizarTexto($item['name']);
-                        continue;
-                    }
-
-                    if (isset($item['label'])) {
-                        $resultado[] = $this->normalizarTexto($item['label']);
-                        continue;
-                    }
-                }
-
-                $resultado = array_merge($resultado, $this->normalizarLista($item));
-            }
-
-            return array_values(array_unique(array_filter($resultado)));
+        if (!is_array($valor)) {
+            return [];
         }
 
-        return [];
+        $resultado = [];
+
+        foreach ($valor as $item) {
+            $resultado = array_merge($resultado, $this->normalizarLista($item));
+        }
+
+        return $this->valoresUnicos($resultado);
+    }
+
+    private function listaTextoOriginal($valor): array
+    {
+        if ($valor === null || $valor === '' || $valor === false) {
+            return [];
+        }
+
+        if (is_string($valor) || is_numeric($valor)) {
+            $texto = trim((string) $valor);
+
+            return $texto === '' ? [] : [$texto];
+        }
+
+        if (!is_array($valor)) {
+            return [];
+        }
+
+        $resultado = [];
+
+        foreach ($valor as $item) {
+            $resultado = array_merge($resultado, $this->listaTextoOriginal($item));
+        }
+
+        return $this->valoresUnicosTexto($resultado);
+    }
+
+    private function valoresUnicos(array $valores): array
+    {
+        return array_values(array_unique(array_filter($valores, fn ($valor) => $valor !== '')));
+    }
+
+    private function valoresUnicosTexto(array $valores): array
+    {
+        return array_values(array_unique(array_filter(array_map(
+            fn ($valor) => trim((string) $valor),
+            $valores
+        ), fn ($valor) => $valor !== '')));
     }
 
     private function normalizarTexto($valor): string
@@ -775,61 +508,6 @@ class EventoInscripcionService
             ->ascii()
             ->trim()
             ->toString();
-    }
-
-    private function extraerIdsUsuarios(array $data): array
-    {
-        $ids = [];
-
-        foreach ($data as $key => $value) {
-            $keyNormalizado = $this->normalizarTexto($key);
-
-            if (in_array($keyNormalizado, [
-                'usuarios',
-                'usuarios_ids',
-                'usuario_ids',
-                'ids_usuarios',
-                'selected_users',
-                'selected_user_ids',
-                'users',
-                'user_ids',
-            ], true)) {
-                $ids = array_merge($ids, $this->extraerNumeros($value));
-                continue;
-            }
-
-            if (is_array($value)) {
-                $ids = array_merge($ids, $this->extraerIdsUsuarios($value));
-            }
-        }
-
-        return array_values(array_unique(array_map('intval', $ids)));
-    }
-
-    private function extraerNumeros($value): array
-    {
-        if (is_numeric($value)) {
-            return [(int) $value];
-        }
-
-        if (!is_array($value)) {
-            return [];
-        }
-
-        $ids = [];
-
-        foreach ($value as $item) {
-            if (is_numeric($item)) {
-                $ids[] = (int) $item;
-                continue;
-            }
-
-            if (is_array($item)) {
-                $ids = array_merge($ids, $this->extraerNumeros($item));
-            }
-        }
-
-        return $ids;
     }
 
     private function sinAccion(string $mensaje): array
