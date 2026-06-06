@@ -98,6 +98,29 @@ class EventosNotificacionGuardadoService
     }
 
     /**
+     * Genera notificaciones de eventos personales e inscritos para hoy y mañana.
+     */
+    public function generarNotificacionesGeneralesProximas(int $idUsuario): array
+    {
+        $personalesHoy = $this->notificarEventosPersonalesDeHoy($idUsuario);
+        $personalesManana = $this->notificarEventosPersonalesDeManana($idUsuario);
+        $inscritos = $this->generarNotificacionesEventosProximos();
+
+        return [
+            'status' =>
+                ($personalesHoy['status'] ?? false) &&
+                ($personalesManana['status'] ?? false) &&
+                ($inscritos['status'] ?? false),
+            'message' => 'Proceso de notificaciones generales de eventos finalizado',
+            'personales' => [
+                'hoy' => $personalesHoy,
+                'manana' => $personalesManana,
+            ],
+            'inscritos' => $inscritos,
+        ];
+    }
+
+    /**
      * Busca eventos personales solo de hoy o el dia siguiente
      */
     private function notificarEventosPersonalesPorMomento(int $idUsuario, string $momento): array
@@ -256,7 +279,7 @@ class EventosNotificacionGuardadoService
             return $this->sinAccion('El evento personal no corresponde a hoy ni mañana');
         }
 
-        $contextoReferencia = 'evento_personal_' . $idEvento;
+        $contextoReferencia = 'eventos_personales';
 
         return $this->crearOActualizar([
             'id_usuario' => $idUsuario,
@@ -267,7 +290,7 @@ class EventosNotificacionGuardadoService
             'contexto_referencia' => $contextoReferencia,
             'grupo_titulo' => 'Personales',
 
-            'tipo' => 'personal_event_reminder',
+            'tipo' => 'personal_event_reminder_' . $idEvento,
             'mensaje' => $mensaje,
         ]);
     }
@@ -375,10 +398,8 @@ class EventosNotificacionGuardadoService
 
                 $fueCreada = false;
                 $fueActualizada = false;
-                $mensajeCambio = false;
 
                 if ($notificacion) {
-                    $mensajeAnterior = trim((string) $notificacion->mensaje);
                     $mensajeNuevo = trim((string) $data['mensaje']);
 
                     $notificacion->update([
@@ -391,7 +412,6 @@ class EventosNotificacionGuardadoService
                         'mensaje' => $mensajeNuevo,
                     ]);
 
-                    $mensajeCambio = $mensajeAnterior !== $mensajeNuevo;
                     $fueActualizada = true;
                 } else {
                     $notificacion = Notificacion::create([
@@ -428,20 +448,6 @@ class EventosNotificacionGuardadoService
                     ->where('id_notificacion', $notificacion->id_notificacion)
                     ->whereNotIn('id_usuario', $usuarios)
                     ->delete();
-
-                /*
-                 * Si el mensaje cambió, se marca como no leído otra vez.
-                 * Si el job se ejecuta varias veces y el mensaje es igual,
-                 * no se resetea leido_en.
-                 */
-                if ($mensajeCambio) {
-                    NotificacionUsuario::query()
-                        ->where('id_notificacion', $notificacion->id_notificacion)
-                        ->whereIn('id_usuario', $usuarios)
-                        ->update([
-                            'leido_en' => null,
-                        ]);
-                }
 
                 return [
                     'notificacion' => $notificacion->fresh(),
@@ -502,11 +508,11 @@ class EventosNotificacionGuardadoService
         $fechaEvento = Carbon::parse($fecha);
 
         if ($fechaEvento->isToday()) {
-            return 'Hoy tienes ' . $tituloEvento . '.';
+            return 'Hoy tienes el evento ' . $tituloEvento . '.';
         }
 
         if ($fechaEvento->isTomorrow()) {
-            return 'Mañana tienes ' . $tituloEvento . '.';
+            return 'Mañana tienes el evento ' . $tituloEvento . '.';
         }
 
         return null;
