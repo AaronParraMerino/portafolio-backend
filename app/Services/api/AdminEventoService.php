@@ -10,7 +10,9 @@ use App\Models\Usuario;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class AdminEventoService
 {
@@ -412,7 +414,7 @@ class AdminEventoService
     public function formatEvent(AdminEvento $event): array
     {
         $creator = $event->relationLoaded('creador') ? $event->creador : $event->creador()->first();
-        $imageUrl = $event->imagen_portada_url ?: ($event->imagen_portada_path ? Storage::disk('public')->url($event->imagen_portada_path) : null);
+        $imageUrl = $this->resolveCoverImageUrl($event);
 
         return [
             'id' => $event->id_evento,
@@ -429,6 +431,8 @@ class AdminEventoService
             'fecha_inicio' => $this->formatDateTime($event->fecha_inicio),
             'endsAt' => $this->formatDateTime($event->fecha_fin),
             'fecha_fin' => $this->formatDateTime($event->fecha_fin),
+            'sendAt' => $this->formatDateTime($event->programado_para),
+            'programado_para' => $this->formatDateTime($event->programado_para),
             'date' => $event->fecha_inicio?->format('Y-m-d'),
             'fecha' => $event->fecha_inicio?->format('Y-m-d'),
             'time' => $event->fecha_inicio?->format('H:i'),
@@ -455,42 +459,61 @@ class AdminEventoService
             ] : null,
             'communicationsCount' => 0,
             'comunicaciones' => 0,
-            'segments' => [],
-            'channels' => [],
+            'targetMode' => $event->target_mode ?? 'all_users',
+            'target_mode' => $event->target_mode ?? 'all_users',
+            'targetSelections' => $event->target_selections ?? [],
+            'target_selections' => $event->target_selections ?? [],
+            'segments' => $event->segments ?? [],
+            'segmentos' => $event->segments ?? [],
+            'channels' => $event->channels ?? [],
+            'canales' => $event->channels ?? [],
         ];
     }
 
     private function history()
     {
         return AdminEventoHistorial::query()
+            ->with('actor:id_usuario,nombre,apellido,correo,rol')
             ->orderByDesc('created_at')
             ->orderByDesc('id_historial')
             ->limit(500)
             ->get()
-            ->map(fn (AdminEventoHistorial $item): array => [
-                'id' => $item->id_historial,
-                'id_historial' => $item->id_historial,
-                'title' => $item->titulo,
-                'titulo' => $item->titulo,
-                'description' => $item->descripcion,
-                'descripcion' => $item->descripcion,
-                'type' => $item->tipo,
-                'tipo' => $item->tipo,
-                'status' => $item->estado,
-                'estado' => $item->estado,
-                'target' => $item->destino,
-                'destino' => $item->destino,
-                'date' => $this->formatDateTime($item->created_at),
-                'fecha' => $this->formatDateTime($item->created_at),
-                'actor' => $item->metadata['actor'] ?? 'Sistema',
-                'action' => $item->accion,
-                'accion' => $item->accion,
-                'reason' => $item->descripcion,
-                'motivo' => $item->descripcion,
-                'channels' => $item->channels ?? [],
-                'canales' => $item->channels ?? [],
-                'metadata' => $item->metadata ?? [],
-            ])
+            ->map(function (AdminEventoHistorial $item): array {
+                $actorName = $item->actor
+                    ? trim($item->actor->nombre.' '.$item->actor->apellido)
+                    : ($item->metadata['actor'] ?? 'Sistema');
+
+                return [
+                    'id' => $item->id_historial,
+                    'id_historial' => $item->id_historial,
+                    'title' => $item->titulo,
+                    'titulo' => $item->titulo,
+                    'description' => $item->descripcion,
+                    'descripcion' => $item->descripcion,
+                    'type' => $item->tipo,
+                    'tipo' => $item->tipo,
+                    'status' => $item->estado,
+                    'estado' => $item->estado,
+                    'target' => $item->destino,
+                    'destino' => $item->destino,
+                    'date' => $this->formatDateTime($item->created_at),
+                    'fecha' => $this->formatDateTime($item->created_at),
+                    'actor' => $actorName ?: 'Usuario sin nombre',
+                    'actorId' => $item->usuario_actor_id,
+                    'actor_id' => $item->usuario_actor_id,
+                    'actorRole' => $item->actor?->rol,
+                    'actor_role' => $item->actor?->rol,
+                    'actorEmail' => $item->actor?->correo,
+                    'actor_email' => $item->actor?->correo,
+                    'action' => $item->accion,
+                    'accion' => $item->accion,
+                    'reason' => $item->descripcion,
+                    'motivo' => $item->descripcion,
+                    'channels' => $item->channels ?? [],
+                    'canales' => $item->channels ?? [],
+                    'metadata' => $item->metadata ?? [],
+                ];
+            })
             ->values();
     }
 
@@ -504,15 +527,107 @@ class AdminEventoService
             'estado' => $data['estado'] ?? $data['status'] ?? 'borrador',
             'fecha_inicio' => $data['fecha_inicio'] ?? $data['startsAt'] ?? null,
             'fecha_fin' => $data['fecha_fin'] ?? $data['endsAt'] ?? null,
+            'programado_para' => $data['programado_para'] ?? $data['sendAt'] ?? null,
             'ubicacion' => $data['ubicacion'] ?? $data['location'],
             'cupo' => $data['cupo'] ?? $data['capacity'] ?? 0,
+            'target_mode' => $data['target_mode'] ?? $data['targetMode'] ?? 'all_users',
         ];
+
+        $targetSelections = $this->normalizeTargetSelections($data['targetSelections'] ?? $data['target_selections'] ?? []);
+        $payload['target_selections'] = $targetSelections;
+        $payload['segments'] = $this->buildSegments($data['segments'] ?? $data['segmentos'] ?? [], $targetSelections);
 
         if ($creating) {
             $payload['usuario_creador_id'] = $actorId;
         }
 
-        return array_filter($payload, fn ($value): bool => $value !== null);
+        return array_filter(
+            $payload,
+            fn ($value, string $key): bool => $value !== null || $key === 'programado_para',
+            ARRAY_FILTER_USE_BOTH
+        );
+    }
+
+    private function normalizeTargetSelections($value): array
+    {
+        $source = is_array($value) ? $value : [];
+
+        return [
+            'technicalSkills' => $this->normalizeStringList($source['technicalSkills'] ?? []),
+            'softSkills' => $this->normalizeStringList($source['softSkills'] ?? []),
+            'academicExperience' => $this->normalizeStringList($source['academicExperience'] ?? []),
+            'workExperience' => $this->normalizeStringList($source['workExperience'] ?? []),
+        ];
+    }
+
+    private function buildSegments($segments, array $targetSelections): array
+    {
+        if (is_array($segments) && $this->isAssociativeArray($segments)) {
+            return $segments;
+        }
+
+        $result = [
+            'habilidades' => [
+                'tecnicas' => [
+                    'items' => $targetSelections['technicalSkills'],
+                    'niveles' => [],
+                ],
+                'blandas' => [
+                    'items' => $targetSelections['softSkills'],
+                    'niveles' => [],
+                ],
+            ],
+            'experiencia' => [
+                ...array_map(
+                    fn (string $cargo): array => ['cargo' => $cargo, 'tipos' => ['academica']],
+                    $targetSelections['academicExperience']
+                ),
+                ...array_map(
+                    fn (string $cargo): array => ['cargo' => $cargo, 'tipos' => ['laboral']],
+                    $targetSelections['workExperience']
+                ),
+            ],
+        ];
+
+        return $this->removeEmptyArrays($result);
+    }
+
+    private function normalizeStringList($value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            fn ($item): string => trim((string) $item),
+            $value
+        ))));
+    }
+
+    private function isAssociativeArray(array $value): bool
+    {
+        if ($value === []) {
+            return false;
+        }
+
+        return array_keys($value) !== range(0, count($value) - 1);
+    }
+
+    private function removeEmptyArrays(array $value): array
+    {
+        $result = [];
+
+        foreach ($value as $key => $item) {
+            if (is_array($item)) {
+                $item = $this->removeEmptyArrays($item);
+            }
+
+            if ($item !== [] && $item !== null && $item !== '') {
+                $result[$key] = $item;
+            }
+        }
+
+        return $result;
     }
 
     private function parseEventStart(array $data, $fallback = null): Carbon
@@ -543,24 +658,151 @@ class AdminEventoService
     {
         $this->deleteCoverImage($event);
 
-        $path = $image->store('eventos/portadas', 'public');
+        $upload = $this->storeCoverImageInSupabase($event, $image)
+            ?? $this->storeCoverImageLocally($image);
 
         $event->update([
-            'imagen_portada_path' => $path,
-            'imagen_portada_url' => Storage::disk('public')->url($path),
+            'imagen_portada_path' => $upload['path'],
+            'imagen_portada_url' => $upload['url'],
         ]);
     }
 
     private function deleteCoverImage(AdminEvento $event): void
     {
         if ($event->imagen_portada_path) {
-            Storage::disk('public')->delete($event->imagen_portada_path);
+            if ($this->isSupabaseCoverImage($event->imagen_portada_path, $event->imagen_portada_url)) {
+                $this->deleteCoverImageFromSupabase($event->imagen_portada_path);
+            } else {
+                Storage::disk('public')->delete($event->imagen_portada_path);
+            }
         }
 
         $event->update([
             'imagen_portada_path' => null,
             'imagen_portada_url' => null,
         ]);
+    }
+
+    private function storeCoverImageInSupabase(AdminEvento $event, UploadedFile $image): ?array
+    {
+        $bucket = trim((string) env('SUPABASE_BUCKET'), '/');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+        $key = (string) env('SUPABASE_KEY');
+
+        if ($bucket === '' || $urlBase === '' || $key === '') {
+            return null;
+        }
+
+        $extension = $image->getClientOriginalExtension() ?: $image->extension() ?: 'jpg';
+        $path = 'events/evento-' . $event->id_evento . '-' . Str::uuid() . '.' . strtolower($extension);
+        $content = file_get_contents($image->getRealPath());
+
+        if ($content === false) {
+            return null;
+        }
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $path,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $content,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'apikey: ' . $key,
+                'Content-Type: ' . ($image->getMimeType() ?: 'application/octet-stream'),
+            ],
+        ]);
+
+        curl_exec($ch);
+        $error = curl_error($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($error || $status >= 400) {
+            Log::warning('No se pudo subir la portada del evento a Supabase Storage; se usara storage local.', [
+                'evento_id' => $event->id_evento,
+                'status' => $status,
+                'error' => $error,
+            ]);
+
+            return null;
+        }
+
+        return [
+            'path' => $path,
+            'url' => $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $path,
+        ];
+    }
+
+    private function storeCoverImageLocally(UploadedFile $image): array
+    {
+        $path = $image->store('eventos/portadas', 'public');
+
+        return [
+            'path' => $path,
+            'url' => Storage::disk('public')->url($path),
+        ];
+    }
+
+    private function deleteCoverImageFromSupabase(string $path): void
+    {
+        $bucket = trim((string) env('SUPABASE_BUCKET'), '/');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+        $key = (string) env('SUPABASE_KEY');
+
+        if ($bucket === '' || $urlBase === '' || $key === '') {
+            return;
+        }
+
+        $ch = curl_init();
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . ltrim($path, '/'),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => 'DELETE',
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $key,
+                'apikey: ' . $key,
+            ],
+        ]);
+
+        curl_exec($ch);
+        curl_close($ch);
+    }
+
+    private function resolveCoverImageUrl(AdminEvento $event): ?string
+    {
+        if ($event->imagen_portada_url) {
+            return $event->imagen_portada_url;
+        }
+
+        if (! $event->imagen_portada_path) {
+            return null;
+        }
+
+        if ($this->isSupabaseCoverImage($event->imagen_portada_path, null)) {
+            $bucket = trim((string) env('SUPABASE_BUCKET'), '/');
+            $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+
+            if ($bucket !== '' && $urlBase !== '') {
+                return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . ltrim($event->imagen_portada_path, '/');
+            }
+        }
+
+        return Storage::disk('public')->url($event->imagen_portada_path);
+    }
+
+    private function isSupabaseCoverImage(?string $path, ?string $url): bool
+    {
+        if ($path && str_starts_with(ltrim($path, '/'), 'events/')) {
+            return true;
+        }
+
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
+
+        return $url && $urlBase !== '' && str_starts_with($url, $urlBase . '/storage/v1/object/public/');
     }
 
     private function notifyUser(

@@ -34,9 +34,95 @@ class HomePortfolioService
         ];
     }
 
+    public function getStats(): array
+    {
+        return [
+            'developers' => $this->publicDevelopersCount(),
+            'projects' => $this->publicProjectsCount(),
+            'technologies' => $this->publicTechnologiesCount(),
+            'events' => $this->publicEventsCount(),
+        ];
+    }
+
+    public function getPublicDevelopers(int $page = 1, int $perPage = 20, ?string $search = null): array
+    {
+        $page = max(1, $page);
+        $perPage = max(1, min($perPage, 50));
+        $query = $this->basePortfolioQuery();
+        $term = trim((string) $search);
+
+        if ($term !== '') {
+            $like = '%' . $term . '%';
+            $query->whereRaw("LOWER(usuarios.nombre || ' ' || usuarios.apellido) LIKE LOWER(?)", [$like]);
+        }
+
+        $paginator = $query
+            ->orderByDesc('ultima_actividad')
+            ->orderBy('usuarios.nombre')
+            ->paginate($perPage, ['*'], 'page', $page);
+
+        return [
+            'items' => $this->mapPortfolios(new Collection($paginator->items())),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ],
+        ];
+    }
+
     private function topProjects(int $limit): array
     {
         return $this->rankedBy('total_proyectos', $limit);
+    }
+
+    private function publicDevelopersCount(): int
+    {
+        return (int) DB::table('usuarios')
+            ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
+            ->whereIn('usuarios.estado', ['activo', 'pausado'])
+            ->where('usuarios.rol', '!=', 'admin')
+            ->whereRaw('perfiles.es_publico = true')
+            ->distinct('usuarios.id_usuario')
+            ->count('usuarios.id_usuario');
+    }
+
+    private function publicProjectsCount(): int
+    {
+        return (int) DB::table('proyectos')
+            ->join('participaciones', 'participaciones.id_proyecto', '=', 'proyectos.id_proyecto')
+            ->where('participaciones.visibilidad', 'publico')
+            ->whereNull('participaciones.deleted_at')
+            ->whereNull('proyectos.deleted_at')
+            ->distinct('proyectos.id_proyecto')
+            ->count('proyectos.id_proyecto');
+    }
+
+    private function publicTechnologiesCount(): int
+    {
+        return (int) DB::table('tecnologias')
+            ->join('uso_tecnologias', 'uso_tecnologias.id_tecnologia', '=', 'tecnologias.id_tecnologia')
+            ->join('proyectos', 'proyectos.id_proyecto', '=', 'uso_tecnologias.id_proyecto')
+            ->join('participaciones', 'participaciones.id_proyecto', '=', 'proyectos.id_proyecto')
+            ->where('participaciones.visibilidad', 'publico')
+            ->whereNull('participaciones.deleted_at')
+            ->whereNull('uso_tecnologias.deleted_at')
+            ->whereNull('proyectos.deleted_at')
+            ->whereNull('tecnologias.deleted_at')
+            ->distinct('tecnologias.id_tecnologia')
+            ->count('tecnologias.id_tecnologia');
+    }
+
+    private function publicEventsCount(): int
+    {
+        return (int) DB::table('admin_eventos')
+            ->whereIn('estado', ['activo', 'programado'])
+            ->where(function ($query) {
+                $query->whereNull('fecha_fin')
+                    ->orWhere('fecha_fin', '>=', now());
+            })
+            ->count();
     }
 
     public function getPublicPortfolio(int $userId): ?array
@@ -172,6 +258,7 @@ class HomePortfolioService
                 $join->on('proyectos_publicos.id_usuario', '=', 'usuarios.id_usuario');
             })
             ->whereIn('usuarios.estado', ['activo', 'pausado'])
+            ->where('usuarios.rol', '!=', 'admin')
             ->whereRaw('perfiles.es_publico = true')
             ->select([
                 'usuarios.id_usuario',
