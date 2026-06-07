@@ -2,9 +2,11 @@
 
 use App\Http\Controllers\Api\Administrador\UsuarioController;
 use App\Http\Controllers\Api\Administrador\NotificacionController;
+use App\Http\Controllers\Api\Administrador\BitacoraController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('administrador')->middleware('auth:sanctum')->group(function () {
+    Route::get('/bitacoras', [BitacoraController::class, 'index']);
     Route::get('/usuarios', [UsuarioController::class, 'index']);
     Route::patch('/usuarios/{id}/activar', [UsuarioController::class, 'activate'])->whereNumber('id');
     Route::patch('/usuarios/{id}/pausar', [UsuarioController::class, 'pause'])->whereNumber('id');
