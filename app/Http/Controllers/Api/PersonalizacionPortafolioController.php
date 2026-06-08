@@ -17,12 +17,18 @@ class PersonalizacionPortafolioController extends Controller
     ) {
     }
 
-    public function publicView(int $userId): JsonResponse
+    public function publicView(Request $request, int $userId): JsonResponse
     {
-        $portafolio = $this->publicService->getByUser($userId);
+        $lang = $request->query('lang', 'es');
+
+        if (! in_array($lang, ['es', 'en', 'pt'], true)) {
+            $lang = 'es';
+        }
+
+        $portafolio = $this->publicService->getByUser($userId, $lang);
 
         if (! $portafolio) {
-            return response()->json(['message' => 'Portafolio no disponible'], 404);
+            return response()->json(['message' => 'Portafolio no encontrado'], 404);
         }
 
         return response()->json(['data' => $portafolio]);
