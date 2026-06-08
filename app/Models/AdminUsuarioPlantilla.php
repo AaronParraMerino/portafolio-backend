@@ -4,9 +4,9 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class AdminEventoPlantilla extends Model
+class AdminUsuarioPlantilla extends Model
 {
-    protected $table = 'admin_evento_plantillas';
+    protected $table = 'admin_usuario_plantillas';
     protected $primaryKey = 'id_plantilla';
 
     protected $fillable = [
@@ -15,16 +15,16 @@ class AdminEventoPlantilla extends Model
         'titulo',
         'cuerpo',
         'tipo',
-        'channels',
-        'payload',
+        'urgencia',
+        'canales',
         'usadas',
     ];
 
     protected function casts(): array
     {
         return [
-            'channels' => 'array',
-            'payload' => 'array',
+            'canales' => 'array',
+            'usadas' => 'integer',
         ];
     }
 }

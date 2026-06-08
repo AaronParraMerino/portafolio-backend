@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api\Administrador;
 
 use App\Http\Controllers\Controller;
+use App\Models\AdminUsuarioPlantilla;
+use App\Models\Aviso;
 use App\Models\Notificacion;
 use App\Models\SesionBase;
 use App\Models\Usuario;
@@ -35,6 +37,7 @@ class UsuarioController extends Controller
 
         $usuarios = Usuario::query()
             ->with('perfil:id_perfil,usuario_id,foto_perfil')
+            ->where('rol', '!=', 'admin')
             ->select([
                 'id_usuario',
                 'nombre',
@@ -113,15 +116,61 @@ class UsuarioController extends Controller
                     'urgencia' => 'baja',
                     'destinatarios' => (int) $notice->destinatarios_count,
                     'creado' => $notice->created_at?->format('d/m/Y H:i'),
+                    'created_at' => $notice->created_at?->toISOString(),
                     'segmentos' => [],
                     'canales' => ['inapp'],
                 ];
             })
             ->values();
 
+        $globalCommunications = Aviso::query()
+            ->where('estado', '!=', Aviso::ESTADO_ELIMINADO)
+            ->orderByDesc('created_at')
+            ->limit(1000)
+            ->get()
+            ->map(fn (Aviso $notice): array => [
+                'id' => 'global_'.$notice->id_aviso,
+                'titulo' => $notice->titulo,
+                'cuerpo' => $notice->mensaje,
+                'tipo' => $notice->tipo,
+                'estado' => $notice->estado === Aviso::ESTADO_ACTIVO ? 'enviado' : 'archivado',
+                'urgencia' => match ($notice->prioridad) {
+                    Aviso::PRIORIDAD_NORMAL => 'media',
+                    Aviso::PRIORIDAD_CRITICA => 'alta',
+                    default => $notice->prioridad,
+                },
+                'destinatarios' => $usuarios->count(),
+                'creado' => $notice->created_at?->format('d/m/Y H:i'),
+                'created_at' => $notice->created_at?->toISOString(),
+                'segmentos' => ['todos'],
+                'canales' => ['inapp'],
+            ]);
+
+        $communications = $communications
+            ->concat($globalCommunications)
+            ->sortByDesc('created_at')
+            ->values();
+
+        $templates = AdminUsuarioPlantilla::query()
+            ->orderByDesc('updated_at')
+            ->get()
+            ->map(fn (AdminUsuarioPlantilla $template): array => [
+                'id' => $template->id_plantilla,
+                'titulo' => $template->titulo,
+                'cuerpo' => $template->cuerpo,
+                'tipo' => $template->tipo,
+                'urgencia' => $template->urgencia,
+                'canales' => $template->canales ?? [],
+                'usadas' => (int) $template->usadas,
+                'actualizado' => $template->updated_at?->format('d/m/Y H:i'),
+            ])
+            ->values();
+
         return response()->json([
             'items' => $items,
             'communications' => $communications,
+            'history' => $communications->take(20)->values(),
+            'templates' => $templates,
             'metrics' => [
                 'total' => $usuarios->count(),
                 'activo' => $usuarios->where('estado', 'activo')->count(),
@@ -131,7 +180,7 @@ class UsuarioController extends Controller
             ],
             'sourceReady' => true,
             'supportsMutations' => false,
-            'supportsSessions' => false,
+            'supportsSessions' => true,
             'supportsActivation' => true,
             'supportsPausing' => true,
             'supportsBlocking' => true,
