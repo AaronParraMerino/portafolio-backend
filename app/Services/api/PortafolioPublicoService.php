@@ -9,12 +9,15 @@ class PortafolioPublicoService
 {
     public function __construct(
         private readonly PersonalizacionPortafolioService $personalizacionService,
-        private readonly ProfileImageVariantService $profileImageVariants
+        private readonly ProfileImageVariantService $profileImageVariants,
+        private readonly ContenidoTraduccionService $traduccionService
     ) {
     }
 
-    public function getByUser(int $userId): ?array
+    public function getByUser(int $userId, string $lang = 'es'): ?array
     {
+        $lang = $this->traduccionService->normalizarIdioma($lang);
+
         $usuario = Usuario::with(['perfil', 'visibilidades'])->find($userId);
 
         if (
@@ -29,16 +32,20 @@ class PortafolioPublicoService
         $configuracion = $this->personalizacionService->getByUser($userId) ?? [];
 
         return [
-            'perfil' => $this->serializePerfil($usuario, $configuracion['visibilidad']['perfil'] ?? []),
+            'perfil' => $this->serializePerfil(
+                $usuario,
+                $configuracion['visibilidad']['perfil'] ?? [],
+                $lang
+            ),
             'redes' => $this->getRedes($userId),
-            'habilidades' => $this->getHabilidades($userId),
-            'experiencias' => $this->getExperiencias($userId),
-            'proyectos' => $this->getProyectos($userId),
+            'habilidades' => $this->getHabilidades($userId, $lang),
+            'experiencias' => $this->getExperiencias($userId, $lang),
+            'proyectos' => $this->getProyectos($userId, $lang),
             'config' => $configuracion ?: (object) [],
         ];
     }
 
-    private function serializePerfil(Usuario $usuario, array $configVisibility = []): array
+    private function serializePerfil(Usuario $usuario, array $configVisibility = [], string $lang = 'es'): array
     {
         $perfil = $usuario->perfil;
         $fotoVariantes = $this->profileImageVariants->getVariantUrls($perfil?->foto_perfil);
@@ -58,6 +65,24 @@ class PortafolioPublicoService
             'profesion' => $this->visible($visibilidadRaw, 'profesion'),
         ];
 
+        $perfilId = $perfil?->id_perfil ?? $usuario->id_usuario;
+
+        $profesion = $this->traduccionService->traducirCampo(
+            'perfil',
+            $perfilId,
+            'profesion',
+            $perfil?->profesion,
+            $lang
+        );
+
+        $biografia = $this->traduccionService->traducirCampo(
+            'perfil',
+            $perfilId,
+            'biografia',
+            $perfil?->biografia,
+            $lang
+        );
+
         return [
             'id' => $usuario->id_usuario,
             'id_usuario' => $usuario->id_usuario,
@@ -65,8 +90,8 @@ class PortafolioPublicoService
             'apellido' => $nombreVisible ? $usuario->apellido : null,
             'correo' => $visibilidad['correo'] ? $usuario->correo : null,
             'telefono' => $visibilidad['telefono'] ? $usuario->telefono : null,
-            'profesion' => $visibilidad['profesion'] ? $perfil?->profesion : null,
-            'biografia' => $visibilidad['biografia'] ? $perfil?->biografia : null,
+            'profesion' => $visibilidad['profesion'] ? $profesion : null,
+            'biografia' => $visibilidad['biografia'] ? $biografia : null,
             'ciudad' => $visibilidad['ciudad'] ? $perfil?->ciudad : null,
             'pais' => $visibilidad['pais'] ? $perfil?->pais : null,
             'foto_perfil' => $perfil?->foto_perfil,
@@ -93,7 +118,7 @@ class PortafolioPublicoService
             ->all();
     }
 
-    private function getHabilidades(int $userId): array
+    private function getHabilidades(int $userId, string $lang = 'es'): array
     {
         return DB::table('habilidades_usuario as hu')
             ->join('habilidades as h', 'h.id_habilidad', '=', 'hu.habilidad_id')
@@ -117,7 +142,7 @@ class PortafolioPublicoService
                 'h.estado'
             )
             ->get()
-            ->map(function ($item) {
+            ->map(function ($item) use ($lang) {
                 $row = (array) $item;
 
                 return [
@@ -129,10 +154,22 @@ class PortafolioPublicoService
                     'fecha_modificacion' => $row['fecha_modificacion'],
                     'habilidad' => [
                         'id_habilidad' => $row['id_habilidad'],
-                        'nombre' => $row['nombre'],
+                        'nombre' => $this->traduccionService->traducirCampo(
+                            'habilidad',
+                            $row['id_habilidad'],
+                            'nombre',
+                            $row['nombre'],
+                            $lang
+                        ),
                         'nombre_normalizado' => $row['nombre_normalizado'],
                         'tipo' => $row['tipo'],
-                        'descripcion' => $row['descripcion'],
+                        'descripcion' => $this->traduccionService->traducirCampo(
+                            'habilidad',
+                            $row['id_habilidad'],
+                            'descripcion',
+                            $row['descripcion'],
+                            $lang
+                        ),
                         'estado' => $row['estado'],
                     ],
                 ];
@@ -140,7 +177,7 @@ class PortafolioPublicoService
             ->all();
     }
 
-    private function getExperiencias(int $userId): array
+    private function getExperiencias(int $userId, string $lang = 'es'): array
     {
         return DB::table('experiencias')
             ->where('usuario_id', $userId)
@@ -148,11 +185,22 @@ class PortafolioPublicoService
             ->orderByDesc('fecha_inicio')
             ->orderByDesc('id_experiencia')
             ->get()
-            ->map(fn ($item) => (array) $item)
+            ->map(function ($item) use ($lang) {
+                $experiencia = (array) $item;
+                $id = $experiencia['id_experiencia'] ?? null;
+
+                return $this->traduccionService->traducirArray(
+                    $experiencia,
+                    'experiencia',
+                    $id,
+                    ['cargo', 'descripcion'],
+                    $lang
+                );
+            })
             ->all();
     }
 
-    private function getProyectos(int $userId): array
+    private function getProyectos(int $userId, string $lang = 'es'): array
     {
         return DB::table('participaciones as p')
             ->join('proyectos as pr', 'pr.id_proyecto', '=', 'p.id_proyecto')
@@ -163,6 +211,7 @@ class PortafolioPublicoService
             ->orderByDesc('pr.updated_at')
             ->select(
                 'pr.*',
+                'p.id_participacion',
                 'p.rol',
                 'p.descripcion_aporte',
                 'p.visibilidad',
@@ -170,13 +219,31 @@ class PortafolioPublicoService
                 'p.fecha_fin as part_fecha_fin'
             )
             ->get()
-            ->map(fn ($project) => $this->serializeProject((array) $project))
+            ->map(fn ($project) => $this->serializeProject((array) $project, $lang))
             ->all();
     }
 
-    private function serializeProject(array $project): array
+    private function serializeProject(array $project, string $lang = 'es'): array
     {
         $id = (int) $project['id_proyecto'];
+
+        $project = $this->traduccionService->traducirArray(
+            $project,
+            'proyecto',
+            $id,
+            ['titulo', 'descripcion'],
+            $lang
+        );
+
+        $idParticipacion = $project['id_participacion'] ?? null;
+
+        $project = $this->traduccionService->traducirArray(
+            $project,
+            'participacion',
+            $idParticipacion,
+            ['rol', 'descripcion_aporte'],
+            $lang
+        );        
 
         $evidencias = DB::table('proyecto_evidencias')
             ->where('id_proyecto', $id)
@@ -248,7 +315,7 @@ class PortafolioPublicoService
             ->filter()
             ->values();
 
-        $participantes = $this->getParticipantesPublicos($id);
+        $participantes = $this->getParticipantesPublicos($id, $lang);
         $participantesCount = count($participantes);
 
         return [
@@ -274,7 +341,7 @@ class PortafolioPublicoService
         ];
     }
 
-    private function getParticipantesPublicos(int $projectId): array
+    private function getParticipantesPublicos(int $projectId, string $lang = 'es'): array
     {
         $mostrarSinValidacion = DB::table('proyecto_configuraciones')
             ->where('id_proyecto', $projectId)
@@ -330,7 +397,7 @@ class PortafolioPublicoService
                 ->groupBy('id_usuario');
 
         return $rows
-            ->map(function ($row) use ($validaciones, $mostrarSinValidacion) {
+            ->map(function ($row) use ($validaciones, $mostrarSinValidacion, $lang) {
                 $userValidaciones = $validaciones->get($row->id_usuario, collect());
                 $validacion = $userValidaciones->first(fn ($item) => $this->toBoolean($item->validado))
                     ?? $userValidaciones->first();
@@ -344,14 +411,30 @@ class PortafolioPublicoService
                     ? 'usuario_github_validado'
                     : 'usuario_sin_validacion_github';
 
+                $rolTraducido = $this->traduccionService->traducirCampo(
+                    'participacion',
+                    $row->id_participacion,
+                    'rol',
+                    $row->rol,
+                    $lang
+                );
+
+                $descripcionAporteTraducida = $this->traduccionService->traducirCampo(
+                    'participacion',
+                    $row->id_participacion,
+                    'descripcion_aporte',
+                    $row->descripcion_aporte,
+                    $lang
+                );
+
                 return [
                     'id' => 'participacion-' . $row->id_participacion,
                     'id_participacion' => (int) $row->id_participacion,
                     'id_usuario' => (int) $row->id_usuario,
                     'nombre' => trim(($row->nombre ?? '') . ' ' . ($row->apellido ?? '')),
                     'email' => $row->correo,
-                    'rol' => $row->rol,
-                    'descripcion_aporte' => $row->descripcion_aporte,
+                    'rol' => $rolTraducido,
+                    'descripcion_aporte' => $descripcionAporteTraducida,
                     'es_propietario' => (bool) $row->es_propietario,
                     'foto_perfil' => $row->foto_perfil,
                     'avatar_thumb_url' => $this->profileImageVariants->getVariantUrl($row->foto_perfil, 'thumb'),
