@@ -30,6 +30,15 @@ class HomePortfolioController extends Controller
         ]);
     }
 
+    public function recentProjects(Request $request): JsonResponse
+    {
+        $limit = (int) $request->query('limit', 12);
+
+        return response()->json([
+            'data' => $this->homePortfolioService->getRecentProjects($limit),
+        ]);
+    }
+
     public function developers(Request $request): JsonResponse
     {
         $page = (int) $request->query('page', 1);

@@ -12,8 +12,14 @@ use Illuminate\Support\Str;
 class HomePortfolioService
 {
     private const DEFAULT_LIMIT = 6;
+    private const RECENT_PROJECTS_LIMIT = 12;
+    private const HERO_PROJECTS_LIMIT = 6;
     private const SKILLS_LIMIT = 3;
     private const EXPERIENCES_LIMIT = 3;
+
+    public function __construct(private readonly ProfileImageVariantService $profileImageVariants)
+    {
+    }
 
     public function getFeaturedPortfolios(int $limit = self::DEFAULT_LIMIT, ?string $search = null): array
     {
@@ -41,6 +47,87 @@ class HomePortfolioService
             'projects' => $this->publicProjectsCount(),
             'technologies' => $this->publicTechnologiesCount(),
             'events' => $this->publicEventsCount(),
+        ];
+    }
+
+    public function getRecentProjects(int $limit = self::RECENT_PROJECTS_LIMIT): array
+    {
+        $limit = max(self::HERO_PROJECTS_LIMIT, min($limit, 24));
+
+        $projects = DB::table('proyectos as p')
+            ->where('p.estado_publicacion', 'publicado')
+            ->whereNull('p.deleted_at')
+            ->whereExists(function ($query) {
+                $query
+                    ->selectRaw('1')
+                    ->from('participaciones as par')
+                    ->whereColumn('par.id_proyecto', 'p.id_proyecto')
+                    ->where('par.visibilidad', 'publico')
+                    ->whereNull('par.deleted_at');
+            })
+            ->orderByRaw('COALESCE(p.publicado_at, p.updated_at, p.created_at) DESC')
+            ->orderByDesc('p.id_proyecto')
+            ->limit($limit)
+            ->get([
+                'p.id_proyecto',
+                'p.titulo',
+                'p.descripcion',
+                'p.categoria_proyecto',
+                'p.plataforma_objetivo',
+                'p.estado_desarrollo',
+                'p.fecha_inicio',
+                'p.fecha_fin',
+                'p.es_destacado',
+                'p.publicado_at',
+                'p.created_at',
+                'p.updated_at',
+            ]);
+
+        $projectIds = $projects
+            ->pluck('id_proyecto')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $technologies = $this->recentProjectTechnologies($projectIds);
+        $coverImages = $this->recentProjectCoverImages($projectIds);
+
+        $items = $projects
+            ->map(function ($project) use ($technologies, $coverImages) {
+                $id = (int) $project->id_proyecto;
+                $projectTechnologies = collect($technologies[$id] ?? []);
+                $cover = $coverImages[$id] ?? null;
+
+                return [
+                    'id' => $id,
+                    'id_proyecto' => $id,
+                    'titulo' => $project->titulo,
+                    'descripcion' => $project->descripcion,
+                    'tipo' => $project->categoria_proyecto,
+                    'categoria_proyecto' => $project->categoria_proyecto,
+                    'desarrollado_para' => $project->plataforma_objetivo,
+                    'plataforma_objetivo' => $project->plataforma_objetivo,
+                    'estado_desarrollo' => $project->estado_desarrollo,
+                    'fecha_inicio' => $project->fecha_inicio,
+                    'fecha_fin' => $project->fecha_fin,
+                    'es_destacado' => (bool) $project->es_destacado,
+                    'publicado_at' => $project->publicado_at,
+                    'updated_at' => $project->updated_at,
+                    'imagen_portada' => $cover,
+                    'tecnologias' => $projectTechnologies->pluck('nombre')->values()->all(),
+                    'tecnologias_detalle' => $projectTechnologies->values()->all(),
+                ];
+            })
+            ->values()
+            ->all();
+
+        return [
+            'hero' => array_slice($items, 0, self::HERO_PROJECTS_LIMIT),
+            'recientes' => $items,
+            'meta' => [
+                'hero_limit' => self::HERO_PROJECTS_LIMIT,
+                'recent_limit' => $limit,
+                'total' => count($items),
+            ],
         ];
     }
 
@@ -75,6 +162,76 @@ class HomePortfolioService
     private function topProjects(int $limit): array
     {
         return $this->rankedBy('total_proyectos', $limit);
+    }
+
+    private function recentProjectTechnologies(array $projectIds): array
+    {
+        if ($projectIds === []) {
+            return [];
+        }
+
+        return DB::table('uso_tecnologias as ut')
+            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+            ->whereIn('ut.id_proyecto', $projectIds)
+            ->whereRaw('ut.es_visible IS TRUE')
+            ->whereNull('ut.deleted_at')
+            ->whereNull('t.deleted_at')
+            ->orderByDesc('ut.es_principal')
+            ->orderBy('t.nombre')
+            ->get([
+                'ut.id_proyecto',
+                't.id_tecnologia',
+                't.nombre',
+                't.tipo',
+                't.icono_url',
+                't.color',
+            ])
+            ->groupBy('id_proyecto')
+            ->map(fn ($items) => $items
+                ->map(fn ($technology) => (array) $technology)
+                ->values()
+                ->all())
+            ->all();
+    }
+
+    private function recentProjectCoverImages(array $projectIds): array
+    {
+        if ($projectIds === []) {
+            return [];
+        }
+
+        return DB::table('proyecto_evidencias')
+            ->whereIn('id_proyecto', $projectIds)
+            ->whereIn('tipo', ['imagen', 'captura'])
+            ->whereRaw('es_visible IS TRUE')
+            ->whereNull('deleted_at')
+            ->orderByDesc('es_portada')
+            ->orderBy('orden')
+            ->orderBy('id_evidencia')
+            ->get([
+                'id_evidencia',
+                'id_proyecto',
+                'titulo',
+                'tipo',
+                'url',
+                'es_portada',
+                'orden',
+            ])
+            ->groupBy('id_proyecto')
+            ->map(function ($items) {
+                $cover = $items->first();
+                $variants = $this->profileImageVariants->getProjectVariantUrls($cover->url ?? null);
+
+                return [
+                    'id_evidencia' => (int) $cover->id_evidencia,
+                    'titulo' => $cover->titulo,
+                    'tipo' => $cover->tipo,
+                    'url' => $cover->url,
+                    'imagen_card_url' => $variants['card'] ?? null,
+                    'imagen_detail_url' => $variants['detail'] ?? null,
+                ];
+            })
+            ->all();
     }
 
     private function publicDevelopersCount(): int
