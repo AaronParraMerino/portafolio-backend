@@ -48,6 +48,37 @@ class EventoInscripcionService
         );
     }
 
+    public function verPublicos(int $perPage = 12): LengthAwarePaginator
+    {
+        $eventos = $this->baseEventosQuery(0)
+            ->where(function ($query) {
+                $query->where('e.target_mode', 'all_users')
+                    ->orWhereNull('e.target_mode');
+            })
+            ->orderByRaw('CASE WHEN e.fecha_inicio IS NULL THEN 1 ELSE 0 END')
+            ->orderBy('e.fecha_inicio')
+            ->orderByDesc('e.created_at')
+            ->get()
+            ->map(fn ($evento) => $this->formatearEventoPublico($evento))
+            ->values();
+
+        $page = LengthAwarePaginator::resolveCurrentPage();
+        $items = $eventos
+            ->slice(($page - 1) * $perPage, $perPage)
+            ->values();
+
+        return new LengthAwarePaginator(
+            $items,
+            $eventos->count(),
+            $perPage,
+            $page,
+            [
+                'path' => request()->url(),
+                'query' => request()->query(),
+            ]
+        );
+    }
+
     public function inscribirse(int $usuarioId, int $eventoId): array
     {
         return DB::transaction(function () use ($usuarioId, $eventoId) {
@@ -409,6 +440,20 @@ class EventoInscripcionService
 
         if (property_exists($evento, 'imagen_portada_url')) {
             $data['imagen_portada_url'] = $evento->imagen_portada_url;
+        }
+
+        return $data;
+    }
+
+    private function formatearEventoPublico(object $evento): array
+    {
+        $data = $this->formatearEvento($evento);
+        $data['esta_inscrito'] = false;
+        $data['id_inscripcion'] = null;
+        $data['fecha_inscripcion'] = null;
+
+        if (isset($data['creador'])) {
+            unset($data['creador']['correo']);
         }
 
         return $data;

@@ -6,6 +6,8 @@ use App\Http\Controllers\Api\EventoInscripcionController;
 // para hacerlo sin autenticacion:
 //Route::prefix('eventos')->group(function () {
 
+Route::get('eventos/publicos', [EventoInscripcionController::class, 'publicos']);
+
 Route::prefix('eventos')->middleware('auth:sanctum')->group(function () {
 
     // Lista eventos visibles para el home del usuario

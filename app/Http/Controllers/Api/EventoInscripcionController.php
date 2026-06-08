@@ -42,6 +42,26 @@ class EventoInscripcionController extends Controller
         ]);
     }
 
+    public function publicos(Request $request): JsonResponse
+    {
+        $perPage = (int) $request->query('por_pagina', 12);
+        $eventos = $this->service->verPublicos($perPage);
+
+        return response()->json([
+            'accion' => true,
+            'mensaje' => 'Eventos publicos obtenidos correctamente',
+            'eventos' => $eventos->items(),
+            'paginacion' => [
+                'pagina_actual' => $eventos->currentPage(),
+                'por_pagina' => $eventos->perPage(),
+                'total' => $eventos->total(),
+                'ultima_pagina' => $eventos->lastPage(),
+                'desde' => $eventos->firstItem(),
+                'hasta' => $eventos->lastItem(),
+            ],
+        ]);
+    }
+
     /**
      * Inscribe al usuario en un evento
      */
