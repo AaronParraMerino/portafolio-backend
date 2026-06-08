@@ -15,10 +15,13 @@ class Bitacora extends Model
 
     protected $fillable = [
         'usuario_id',
+        'usuario_referencia_id',
         'accion',
         'descripcion',
         'ip_address',
         'user_agent',
+        'tabla_afectada',
+        'registro_afectado_id',
         'fecha',
     ];
 
@@ -29,5 +32,10 @@ class Bitacora extends Model
     public function usuario()
     {
         return $this->belongsTo(Usuario::class, 'usuario_id', 'id_usuario');
+    }
+
+    public function usuarioReferencia()
+    {
+        return $this->belongsTo(Usuario::class, 'usuario_referencia_id', 'id_usuario');
     }
 }
