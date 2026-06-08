@@ -753,7 +753,6 @@ class NotificacionService
      */
     private function generarNotificacionesEventosProximos(int $idUsuario): void
     {
-        $this->eventosNotificacionGuardadoService->notificarEventosPersonalesDeHoy($idUsuario);
-        $this->eventosNotificacionGuardadoService->notificarEventosPersonalesDeManana($idUsuario);
+        $this->eventosNotificacionGuardadoService->generarNotificacionesGeneralesProximas($idUsuario);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class AdminEventoHistorial extends Model
 {
@@ -29,5 +30,10 @@ class AdminEventoHistorial extends Model
             'channels' => 'array',
             'metadata' => 'array',
         ];
+    }
+
+    public function actor(): BelongsTo
+    {
+        return $this->belongsTo(Usuario::class, 'usuario_actor_id', 'id_usuario');
     }
 }

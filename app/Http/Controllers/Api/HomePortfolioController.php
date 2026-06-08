@@ -23,6 +23,24 @@ class HomePortfolioController extends Controller
         ]);
     }
 
+    public function stats(): JsonResponse
+    {
+        return response()->json([
+            'data' => $this->homePortfolioService->getStats(),
+        ]);
+    }
+
+    public function developers(Request $request): JsonResponse
+    {
+        $page = (int) $request->query('page', 1);
+        $perPage = (int) $request->query('per_page', $request->query('limit', 20));
+        $search = $request->query('q', $request->query('search', $request->query('nombre')));
+
+        return response()->json([
+            'data' => $this->homePortfolioService->getPublicDevelopers($page, $perPage, $search),
+        ]);
+    }
+
     public function show(int $userId): JsonResponse
     {
         $portfolio = $this->homePortfolioService->getPublicPortfolio($userId);
