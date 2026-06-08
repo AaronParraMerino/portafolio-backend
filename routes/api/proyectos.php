@@ -2,6 +2,10 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\ProyectoController;
+use App\Http\Controllers\Api\HomePortfolioController;
+
+Route::get('projects/public/{projectId}', [HomePortfolioController::class, 'projectDetail'])
+    ->middleware('auth:sanctum');
 
 Route::prefix('projects')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
     Route::get('/usuario/{userId}', [ProyectoController::class, 'indexByUsuario']);

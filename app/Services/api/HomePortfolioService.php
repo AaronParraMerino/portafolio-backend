@@ -131,6 +131,189 @@ class HomePortfolioService
         ];
     }
 
+    public function getPublicProjectDetail(int $projectId): ?array
+    {
+        $project = DB::table('proyectos as p')
+            ->where('p.id_proyecto', $projectId)
+            ->where('p.estado_publicacion', 'publicado')
+            ->whereNull('p.deleted_at')
+            ->whereExists(function ($query) {
+                $query
+                    ->selectRaw('1')
+                    ->from('participaciones as par')
+                    ->whereColumn('par.id_proyecto', 'p.id_proyecto')
+                    ->where('par.visibilidad', 'publico')
+                    ->whereNull('par.deleted_at');
+            })
+            ->first();
+
+        if (! $project) {
+            return null;
+        }
+
+        $evidences = DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $projectId)
+            ->whereRaw('es_visible IS TRUE')
+            ->whereNull('deleted_at')
+            ->orderByDesc('es_portada')
+            ->orderBy('orden')
+            ->orderBy('id_evidencia')
+            ->get()
+            ->map(function ($evidence) {
+                $item = (array) $evidence;
+
+                if (in_array(strtolower((string) ($item['tipo'] ?? '')), ['imagen', 'captura'], true)) {
+                    $variants = $this->profileImageVariants->getProjectVariantUrls($item['url'] ?? null);
+                    $item['imagen_card_url'] = $variants['card'] ?? null;
+                    $item['imagen_detail_url'] = $variants['detail'] ?? null;
+                }
+
+                return $item;
+            })
+            ->values()
+            ->all();
+
+        $technologies = DB::table('uso_tecnologias as ut')
+            ->join('tecnologias as t', 't.id_tecnologia', '=', 'ut.id_tecnologia')
+            ->where('ut.id_proyecto', $projectId)
+            ->whereRaw('ut.es_visible IS TRUE')
+            ->whereNull('ut.deleted_at')
+            ->whereNull('t.deleted_at')
+            ->orderByDesc('ut.es_principal')
+            ->orderBy('t.nombre')
+            ->get([
+                't.id_tecnologia',
+                't.nombre',
+                't.tipo',
+                't.icono_url',
+                't.color',
+                't.descripcion',
+                'ut.version_usada',
+                'ut.porcentaje_uso',
+                'ut.es_principal',
+            ])
+            ->map(fn ($technology) => (array) $technology)
+            ->values()
+            ->all();
+
+        $repositories = DB::table('proyecto_repositorios as pr')
+            ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
+            ->where('pr.id_proyecto', $projectId)
+            ->whereNull('pr.deleted_at')
+            ->orderBy('pr.id_proyecto_repositorio')
+            ->get([
+                'pr.id_proyecto_repositorio',
+                'pr.nombre',
+                'pr.tipo',
+                'pr.proveedor',
+                'pr.url_repositorio',
+                'pr.descripcion',
+                'rg.github_owner',
+                'rg.github_repo_name',
+                'rg.github_description',
+                'rg.github_homepage',
+                'rg.default_branch',
+                'rg.is_fork',
+                'rg.is_archived',
+                'rg.stars_count',
+                'rg.forks_count',
+                'rg.open_issues_count',
+                'rg.commits_count',
+                'rg.contributors_count',
+                'rg.last_commit_message',
+                'rg.last_commit_date',
+                'rg.last_push_at',
+                'rg.repo_created_at',
+                'rg.repo_updated_at',
+                'rg.readme_resumen',
+                'rg.last_sync_at',
+            ])
+            ->map(fn ($repository) => (array) $repository)
+            ->values()
+            ->all();
+
+        $repositoryLinks = DB::table('participacion_repositorios as participant_repository')
+            ->join('proyecto_repositorios as project_repository', 'project_repository.id_proyecto_repositorio', '=', 'participant_repository.id_proyecto_repositorio')
+            ->where('project_repository.id_proyecto', $projectId)
+            ->get([
+                'participant_repository.id_participacion',
+                'participant_repository.validado',
+                'participant_repository.es_propietario',
+            ])
+            ->groupBy('id_participacion');
+
+        $participants = DB::table('participaciones as par')
+            ->join('usuarios as u', 'u.id_usuario', '=', 'par.id_usuario')
+            ->leftJoin('perfiles as pe', 'pe.usuario_id', '=', 'u.id_usuario')
+            ->leftJoin('cuentas_oauth as co', function ($join) {
+                $join->on('co.usuario_id', '=', 'u.id_usuario')
+                    ->where('co.provider', '=', 'github');
+            })
+            ->where('par.id_proyecto', $projectId)
+            ->where('par.visibilidad', 'publico')
+            ->whereNull('par.deleted_at')
+            ->whereIn('u.estado', ['activo', 'pausado'])
+            ->orderByDesc('par.es_propietario')
+            ->orderBy('u.nombre')
+            ->get([
+                'par.id_participacion',
+                'par.id_usuario',
+                'par.rol',
+                'par.descripcion_aporte',
+                'par.es_propietario',
+                'par.participacion_validada',
+                'par.estado_participacion',
+                'par.fecha_inicio',
+                'par.fecha_fin',
+                'u.nombre',
+                'u.apellido',
+                'pe.foto_perfil',
+                'co.nombre as github_username',
+                'co.foto_url as github_avatar_url',
+            ])
+            ->map(function ($participant) use ($repositoryLinks) {
+                $avatar = $participant->foto_perfil ?: $participant->github_avatar_url;
+                $participantRepositoryLinks = $repositoryLinks->get($participant->id_participacion, collect());
+
+                return [
+                    'id_participacion' => (int) $participant->id_participacion,
+                    'id_usuario' => (int) $participant->id_usuario,
+                    'nombre' => trim(($participant->nombre ?? '') . ' ' . ($participant->apellido ?? '')),
+                    'rol' => $participant->rol,
+                    'descripcion_aporte' => $participant->descripcion_aporte,
+                    'es_propietario' => (bool) $participant->es_propietario,
+                    'participacion_validada' => (bool) $participant->participacion_validada,
+                    'estado_participacion' => $participant->estado_participacion,
+                    'fecha_inicio' => $participant->fecha_inicio,
+                    'fecha_fin' => $participant->fecha_fin,
+                    'avatar_url' => $avatar,
+                    'avatar_thumb_url' => $this->profileImageVariants->getVariantUrl($participant->foto_perfil, 'thumb'),
+                    'github_username' => $participant->github_username,
+                    'vinculado_repositorio' => $participantRepositoryLinks->contains(
+                        fn ($link) => (bool) $link->validado || (bool) $link->es_propietario
+                    ),
+                    'es_propietario_repositorio' => $participantRepositoryLinks->contains(
+                        fn ($link) => (bool) $link->es_propietario
+                    ),
+                    'ruta_portafolio' => '/portafolio/' . $participant->id_usuario,
+                ];
+            })
+            ->values()
+            ->all();
+
+        return [
+            ...(array) $project,
+            'id' => $projectId,
+            'tipo' => $project->categoria_proyecto,
+            'desarrollado_para' => $project->plataforma_objetivo,
+            'evidencias' => $evidences,
+            'tecnologias' => $technologies,
+            'repositorios' => $repositories,
+            'participantes' => $participants,
+            'participantes_count' => count($participants),
+        ];
+    }
+
     public function getPublicDevelopers(int $page = 1, int $perPage = 20, ?string $search = null): array
     {
         $page = max(1, $page);

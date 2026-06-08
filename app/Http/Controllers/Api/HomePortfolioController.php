@@ -39,6 +39,17 @@ class HomePortfolioController extends Controller
         ]);
     }
 
+    public function projectDetail(int $projectId): JsonResponse
+    {
+        $project = $this->homePortfolioService->getPublicProjectDetail($projectId);
+
+        if (! $project) {
+            return response()->json(['message' => 'Proyecto publico no encontrado'], 404);
+        }
+
+        return response()->json(['data' => $project]);
+    }
+
     public function developers(Request $request): JsonResponse
     {
         $page = (int) $request->query('page', 1);
