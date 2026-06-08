@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Usuario;
+use App\Services\api\ContenidoTraduccionService;
 use App\Services\api\PersonalizacionPortafolioService;
 use App\Services\api\PortafolioPublicoService;
 use App\Services\api\ProfileImageVariantService;
@@ -49,7 +50,7 @@ class InactiveAccountVisibilityTest extends TestCase
             'tokenable_id' => $userId,
         ]);
 
-        (new UsuarioService())->delete(Usuario::findOrFail($userId));
+        (new UsuarioService)->delete(Usuario::findOrFail($userId));
 
         $this->assertDatabaseHas('usuarios', ['id_usuario' => $userId, 'estado' => 'inactivo']);
         $this->assertDatabaseHas('visibilidad_campos', ['usuario_id' => $userId, 'visible' => false]);
@@ -83,7 +84,7 @@ class InactiveAccountVisibilityTest extends TestCase
             'tokenable_id' => $userId,
         ]);
 
-        (new UsuarioService())->pause(Usuario::findOrFail($userId));
+        (new UsuarioService)->pause(Usuario::findOrFail($userId));
 
         $this->assertDatabaseHas('usuarios', ['id_usuario' => $userId, 'estado' => 'pausado']);
         $this->assertDatabaseHas('visibilidad_campos', ['usuario_id' => $userId, 'visible' => true]);
@@ -118,7 +119,7 @@ class InactiveAccountVisibilityTest extends TestCase
         return (int) DB::table('usuarios')->insertGetId([
             'nombre' => 'Usuario',
             'apellido' => 'Prueba',
-            'correo' => uniqid('usuario-', true) . '@example.com',
+            'correo' => uniqid('usuario-', true).'@example.com',
             'password' => 'secret',
             'rol' => 'usuario',
             'estado' => $estado,
@@ -160,8 +161,9 @@ class InactiveAccountVisibilityTest extends TestCase
     private function publicPortfolioService(): PortafolioPublicoService
     {
         return new PortafolioPublicoService(
-            new PersonalizacionPortafolioService(),
-            new ProfileImageVariantService()
+            new PersonalizacionPortafolioService,
+            new ProfileImageVariantService,
+            new ContenidoTraduccionService
         );
     }
 

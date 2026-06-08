@@ -2,10 +2,10 @@
 
 namespace Tests\Feature;
 
-use App\Http\Controllers\Api\Administrador\UsuarioController;
+use App\Http\Controllers\Api\Administrador\UsuarioEstadoController;
 use App\Models\Usuario;
-use App\Services\api\NotificacionService;
-use App\Services\api\SeccionService;
+use App\Services\api\Administrador\AdminUsuarioEstadoService;
+use App\Services\api\AdminNotificacionGuardadoService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\Request;
 use Mockery;
@@ -27,21 +27,20 @@ class AdminBlockNotificationTest extends TestCase
         $usuarioService->shouldReceive('findById')->once()->with(25)->andReturn($usuario);
         $usuarioService->shouldReceive('block')->once()->with($usuario);
 
-        $notificacionService = Mockery::mock(NotificacionService::class);
+        $notificacionService = Mockery::mock(AdminNotificacionGuardadoService::class);
         $notificacionService->shouldReceive('createAdminNotice')
             ->once()
             ->withArgs(fn (int $adminId, array $data) => $adminId === 3
                 && $data['destinatarios'] === [25]
-                && $data['titulo'] === 'Cuenta bloqueada'
-                && $data['contenido'] === 'Incumplimiento grave de politicas.'
+                && $data['mensaje'] === 'Incumplimiento grave de politicas.'
                 && $data['tipo'] === 'seguridad'
-                && $data['canales'] === ['inapp'])
+                && $data['urgencia'] === 'alta'
+                && $data['canales'] === ['inapp']
+                && $data['segmentos'] === ['seleccionados'])
             ->andReturn(['status' => 'success']);
 
-        $controller = new UsuarioController(
-            Mockery::mock(SeccionService::class),
-            $usuarioService,
-            $notificacionService
+        $controller = new UsuarioEstadoController(
+            new AdminUsuarioEstadoService($usuarioService, $notificacionService)
         );
         $request = Request::create('/api/administrador/usuarios/25/bloquear', 'PATCH', [
             'razon' => 'Incumplimiento grave de politicas.',

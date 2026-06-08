@@ -2,10 +2,10 @@
 
 namespace Tests\Feature;
 
-use App\Http\Controllers\Api\Administrador\UsuarioController;
+use App\Http\Controllers\Api\Administrador\UsuarioRolController;
 use App\Models\Usuario;
+use App\Services\api\Administrador\AdminUsuarioRolService;
 use App\Services\api\AdminNotificacionGuardadoService;
-use App\Services\api\SeccionService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -73,10 +73,8 @@ class AdminUserRoleManagementTest extends TestCase
                 && $data['canales'] === ['inapp', 'email'])
             ->andReturn(['status' => 'success']);
 
-        $controller = new UsuarioController(
-            Mockery::mock(SeccionService::class),
-            $usuarioService,
-            $notificacionService
+        $controller = new UsuarioRolController(
+            new AdminUsuarioRolService($usuarioService, $notificacionService)
         );
         $request = Request::create('/api/administrador/usuarios/25/rol', 'PATCH', [
             'rol' => 'publicante',
@@ -88,7 +86,7 @@ class AdminUserRoleManagementTest extends TestCase
             'rol' => 'admin',
         ]);
 
-        $response = $controller->updateRole($request, 25);
+        $response = $controller->update($request, 25);
         $data = $response->getData(true)['data'];
 
         $this->assertSame(200, $response->getStatusCode());
@@ -122,10 +120,8 @@ class AdminUserRoleManagementTest extends TestCase
         $notificacionService = Mockery::mock(AdminNotificacionGuardadoService::class);
         $notificacionService->shouldNotReceive('createAdminNotice');
 
-        $controller = new UsuarioController(
-            Mockery::mock(SeccionService::class),
-            $usuarioService,
-            $notificacionService
+        $controller = new UsuarioRolController(
+            new AdminUsuarioRolService($usuarioService, $notificacionService)
         );
         $request = Request::create('/api/administrador/usuarios/25/rol', 'PATCH', [
             'rol' => 'publicante',
@@ -136,7 +132,7 @@ class AdminUserRoleManagementTest extends TestCase
             'rol' => 'admin',
         ]);
 
-        $response = $controller->updateRole($request, 25);
+        $response = $controller->update($request, 25);
 
         $this->assertSame(422, $response->getStatusCode());
         $this->assertStringContainsString('base de datos', $response->getData(true)['message']);

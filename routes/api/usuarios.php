@@ -1,17 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\UsuarioController;
-
-//para hacerlo sin autenticacion: Route::prefix('usuarios')->group(function () {
 
 Route::middleware(['auth:sanctum', 'account.writable'])->prefix('usuarios')->group(function () {
-    Route::get('/', [UsuarioController::class, 'index']);
-    Route::get('/preferencia-idioma', [UsuarioController::class, 'preferenciaIdioma']);
-    Route::patch('/preferencia-idioma', [UsuarioController::class, 'actualizarPreferenciaIdioma']);
-    Route::get('/{id}', [UsuarioController::class, 'show']);
-    Route::post('/', [UsuarioController::class, 'store']);
-    Route::put('/{id}', [UsuarioController::class, 'update']);
-    Route::delete('/{id}', [UsuarioController::class, 'destroy']);
-    Route::post('/cambiar-password', [UsuarioController::class, 'cambiarPassword']);
+    require __DIR__ . '/usuarios/preferencias.php';
+    require __DIR__ . '/usuarios/seguridad.php';
+    require __DIR__ . '/usuarios/crud.php';
 });

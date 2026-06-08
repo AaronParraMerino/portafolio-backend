@@ -2,10 +2,10 @@
 
 namespace Tests\Feature;
 
-use App\Http\Controllers\Api\Administrador\UsuarioController;
+use App\Http\Controllers\Api\Administrador\UsuarioEstadoController;
 use App\Models\Usuario;
-use App\Services\api\NotificacionService;
-use App\Services\api\SeccionService;
+use App\Services\api\Administrador\AdminUsuarioEstadoService;
+use App\Services\api\AdminNotificacionGuardadoService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\Request;
 use Mockery;
@@ -27,21 +27,20 @@ class AdminPauseNotificationTest extends TestCase
         $usuarioService->shouldReceive('findById')->once()->with(25)->andReturn($usuario);
         $usuarioService->shouldReceive('pause')->once()->with($usuario);
 
-        $notificacionService = Mockery::mock(NotificacionService::class);
+        $notificacionService = Mockery::mock(AdminNotificacionGuardadoService::class);
         $notificacionService->shouldReceive('createAdminNotice')
             ->once()
             ->withArgs(fn (int $adminId, array $data) => $adminId === 3
                 && $data['destinatarios'] === [25]
-                && $data['titulo'] === 'Cuenta en pausa'
-                && $data['contenido'] === 'Revision administrativa pendiente.'
+                && $data['mensaje'] === 'Revision administrativa pendiente.'
                 && $data['tipo'] === 'cuenta'
-                && $data['canales'] === ['inapp'])
+                && $data['urgencia'] === 'media'
+                && $data['canales'] === ['inapp']
+                && $data['segmentos'] === ['seleccionados'])
             ->andReturn(['status' => 'success']);
 
-        $controller = new UsuarioController(
-            Mockery::mock(SeccionService::class),
-            $usuarioService,
-            $notificacionService
+        $controller = new UsuarioEstadoController(
+            new AdminUsuarioEstadoService($usuarioService, $notificacionService)
         );
         $request = Request::create('/api/administrador/usuarios/25/pausar', 'PATCH', [
             'razon' => 'Revision administrativa pendiente.',
@@ -69,10 +68,11 @@ class AdminPauseNotificationTest extends TestCase
         $usuarioService->shouldReceive('findById')->once()->with(25)->andReturn($usuario);
         $usuarioService->shouldNotReceive('pause');
 
-        $controller = new UsuarioController(
-            Mockery::mock(SeccionService::class),
-            $usuarioService,
-            Mockery::mock(NotificacionService::class)
+        $controller = new UsuarioEstadoController(
+            new AdminUsuarioEstadoService(
+                $usuarioService,
+                Mockery::mock(AdminNotificacionGuardadoService::class)
+            )
         );
         $request = Request::create('/api/administrador/usuarios/25/pausar', 'PATCH');
         $request->setUserResolver(fn () => (object) [

@@ -2,10 +2,10 @@
 
 namespace Tests\Feature;
 
-use App\Http\Controllers\Api\Administrador\UsuarioController;
+use App\Http\Controllers\Api\Administrador\UsuarioEstadoController;
 use App\Models\Usuario;
-use App\Services\api\NotificacionService;
-use App\Services\api\SeccionService;
+use App\Services\api\Administrador\AdminUsuarioEstadoService;
+use App\Services\api\AdminNotificacionGuardadoService;
 use App\Services\api\UsuarioService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -53,19 +53,20 @@ class AdminInactivationNotificationTest extends TestCase
         $usuarioService->shouldReceive('findById')->once()->with(25)->andReturn($usuario);
         $usuarioService->shouldReceive('delete')->once()->with($usuario);
 
-        $notificacionService = Mockery::mock(NotificacionService::class);
+        $notificacionService = Mockery::mock(AdminNotificacionGuardadoService::class);
         $notificacionService->shouldReceive('createAdminNotice')
             ->once()
             ->withArgs(fn (int $adminId, array $data) => $adminId === 3
                 && $data['destinatarios'] === [25]
-                && $data['contenido'] === 'Incumplimiento de politicas.'
-                && $data['canales'] === ['inapp', 'email'])
+                && $data['mensaje'] === 'Incumplimiento de politicas.'
+                && $data['tipo'] === 'cuenta'
+                && $data['urgencia'] === 'alta'
+                && $data['canales'] === ['inapp', 'email']
+                && $data['segmentos'] === ['seleccionados'])
             ->andReturn(['status' => 'success']);
 
-        $controller = new UsuarioController(
-            Mockery::mock(SeccionService::class),
-            $usuarioService,
-            $notificacionService
+        $controller = new UsuarioEstadoController(
+            new AdminUsuarioEstadoService($usuarioService, $notificacionService)
         );
         $request = Request::create('/api/administrador/usuarios/25', 'DELETE', [
             'razon' => 'Incumplimiento de politicas.',
