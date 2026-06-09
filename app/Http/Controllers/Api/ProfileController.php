@@ -2,16 +2,21 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\api\ContenidoTraduccionService;
 use App\Services\api\ProfileService;
 use Illuminate\Http\Request;
 
 class ProfileController
 {
     protected ProfileService $service;
+    protected ContenidoTraduccionService $traduccionService;
 
-    public function __construct(ProfileService $service)
-    {
+    public function __construct(
+        ProfileService $service,
+        ContenidoTraduccionService $traduccionService
+    ) {
         $this->service = $service;
+        $this->traduccionService = $traduccionService;
     }
 
     /**
@@ -19,12 +24,18 @@ class ProfileController
      * Delega toda la lógica al servicio
      */
 
-    public function show(int $userId)
+    public function show(Request $request, int $userId)
     {
+        $lang = $request->query('lang', 'es');
+
+        $perfil = $this->service->getProfile($userId);
+
         return response()->json(
-            $this->service->getProfile($userId)
+            $this->traducirPerfilPayload($perfil, $userId, $lang)
         );
     }
+
+
 
     /**
      * Actualiza datos del perfil del usuario.
@@ -173,4 +184,47 @@ class ProfileController
 
         return response()->json($response, $response['status'] ? 200 : 400);
     }
+
+    private function traducirPerfilPayload(mixed $payload, int $userId, string $lang): mixed
+    {
+        if (is_object($payload) && method_exists($payload, 'toArray')) {
+            $payload = $payload->toArray();
+        }
+
+        if (! is_array($payload)) {
+            return $payload;
+        }
+
+        if (isset($payload['data']) && is_array($payload['data'])) {
+            $payload['data'] = $this->traducirPerfilPayload($payload['data'], $userId, $lang);
+
+            return $payload;
+        }
+
+        if (isset($payload['perfil']) && is_array($payload['perfil'])) {
+            $payload['perfil'] = $this->traducirPerfilPayload($payload['perfil'], $userId, $lang);
+        }
+
+        $perfilId = $payload['id_perfil']
+            ?? ($payload['perfil']['id_perfil'] ?? null)
+            ?? \DB::table('perfiles')
+                ->where('usuario_id', $userId)
+                ->value('id_perfil')
+            ?? $userId;
+
+        foreach (['profesion', 'biografia'] as $campo) {
+            if (array_key_exists($campo, $payload)) {
+                $payload[$campo] = $this->traduccionService->traducirCampo(
+                    'perfil',
+                    $perfilId,
+                    $campo,
+                    $payload[$campo],
+                    $lang
+                );
+            }
+        }
+
+        return $payload;
+    }
+
 }
