@@ -7,16 +7,23 @@ use App\Services\api\ExperienciaService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use App\Services\api\ContenidoTraduccionService;
 
 class ExperienciaController extends Controller
 {
-    public function __construct(private readonly ExperienciaService $experienciaService)
-    {
+    public function __construct(
+        private readonly ExperienciaService $experienciaService,
+        private readonly ContenidoTraduccionService $traduccionService
+    ) {
     }
 
-    public function index(int $userId): JsonResponse
+    public function index(Request $request, int $userId): JsonResponse
     {
-        $experiencias = $this->experienciaService->getByUserId($userId);
+        $lang = $request->query('lang', 'es');
+
+        $experiencias = collect($this->experienciaService->getByUserId($userId))
+            ->map(fn ($experiencia) => $this->traducirExperiencia($experiencia, $lang))
+            ->values();
 
         return response()->json($experiencias);
     }
@@ -133,4 +140,26 @@ class ExperienciaController extends Controller
             'message' => 'Experiencia eliminada correctamente',
         ]);
     }
+
+    private function traducirExperiencia(mixed $experiencia, string $lang): mixed
+    {
+        if (is_object($experiencia) && method_exists($experiencia, 'toArray')) {
+            $experiencia = $experiencia->toArray();
+        }
+
+        if (! is_array($experiencia)) {
+            return $experiencia;
+        }
+
+        $id = $experiencia['id_experiencia'] ?? $experiencia['id'] ?? null;
+
+        return $this->traduccionService->traducirArray(
+            $experiencia,
+            'experiencia',
+            $id,
+            ['cargo', 'descripcion'],
+            $lang
+        );
+    }
+
 }

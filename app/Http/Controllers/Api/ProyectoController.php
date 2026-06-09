@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use App\Services\api\ContenidoTraduccionService;
 
 use App\Services\api\ProyectoNotificacionGuardadoService;
 
@@ -28,6 +29,7 @@ class ProyectoController extends Controller
         private readonly TecnologiaService $tecnologiaService,
         private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
         private readonly ProfileImageVariantService $profileImageVariants,
+        private readonly ContenidoTraduccionService $traduccionService,
     ) {
     }
 
@@ -37,6 +39,8 @@ class ProyectoController extends Controller
         if ($authUserId <= 0 || $authUserId !== $userId) {
             return response()->json(['message' => 'No autorizado'], 403);
         }
+
+        $lang = $request->query('lang', 'es');
 
         $proyectos = DB::table('participaciones as p')
             ->join('proyectos as pr', 'pr.id_proyecto', '=', 'p.id_proyecto')
@@ -59,11 +63,32 @@ class ProyectoController extends Controller
             ->get();
 
         $indexContext = $this->loadProjectIndexContext($proyectos, $userId);
-        $data = $proyectos->map(function ($row) use ($indexContext) {
-            return $this->serializeProject((array) $row, $indexContext);
+        $data = $proyectos->map(function ($row) use ($indexContext, $lang) {
+            $project = $this->traducirProyectoPrivado((array) $row, $lang);
+
+            return $this->serializeProject($project, $indexContext);
         })->values();
 
         return response()->json(['data' => $data]);
+    }
+
+    private function traducirProyectoPrivado(array $project, string $lang): array
+    {
+        $project = $this->traduccionService->traducirArray(
+            $project,
+            'proyecto',
+            $project['id_proyecto'] ?? null,
+            ['titulo', 'descripcion'],
+            $lang
+        );
+
+        return $this->traduccionService->traducirArray(
+            $project,
+            'participacion',
+            $project['id_participacion'] ?? null,
+            ['rol', 'descripcion_aporte'],
+            $lang
+        );
     }
 
     public function show(Request $request, int $id): JsonResponse
