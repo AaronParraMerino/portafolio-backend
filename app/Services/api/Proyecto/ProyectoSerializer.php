@@ -2,8 +2,10 @@
 
 namespace App\Services\api\Proyecto;
 
+use App\Services\api\ContenidoTraduccionService;
 use App\Services\api\ProfileImageVariantService;
 use Illuminate\Support\Facades\DB;
+
 
 class ProyectoSerializer
 {
@@ -12,11 +14,17 @@ class ProyectoSerializer
     public function __construct(
         private readonly ProyectoPermisoService $proyectoPermisoService,
         private readonly ProfileImageVariantService $profileImageVariants,
+        private readonly ContenidoTraduccionService $traduccionService,
     ) {}
 
-    public function serialize(array $project, ?array $indexContext = null): array
+    public function serialize(
+        array $project,
+        ?array $indexContext = null,
+        string $lang = 'es'
+    ): array
     {
         $id = (int) $project['id_proyecto'];
+        $project = $this->traducirProyecto($project, $lang);
 
         $evidencias = $indexContext !== null
             ? collect($indexContext['evidencias'][$id] ?? [])
@@ -305,4 +313,24 @@ class ProyectoSerializer
             'cancelado',
         ], true) ? $estadoDesarrollo : 'borrador';
     }
+
+    private function traducirProyecto(array $project, string $lang): array
+    {
+        $project = $this->traduccionService->traducirArray(
+            $project,
+            'proyecto',
+            $project['id_proyecto'] ?? null,
+            ['titulo', 'descripcion'],
+            $lang
+        );
+
+        return $this->traduccionService->traducirArray(
+            $project,
+            'participacion',
+            $project['id_participacion'] ?? null,
+            ['rol', 'descripcion_aporte'],
+            $lang
+        );
+    }
+
 }
