@@ -8,7 +8,7 @@ class ProyectoConsultaService
 {
     public function __construct(private readonly ProyectoSerializer $proyectoSerializer) {}
 
-    public function listByUser(int $userId): array
+    public function listByUser(int $userId, string $lang = 'es'): array
     {
         $projects = DB::table('participaciones as p')
             ->join('proyectos as pr', 'pr.id_proyecto', '=', 'p.id_proyecto')
@@ -33,7 +33,11 @@ class ProyectoConsultaService
         $context = $this->proyectoSerializer->loadIndexContext($projects, $userId);
 
         return $projects
-            ->map(fn ($project) => $this->proyectoSerializer->serialize((array) $project, $context))
+            ->map(fn ($project) => $this->proyectoSerializer->serialize(
+                (array) $project,
+                $context,
+                $lang
+            ))
             ->values()
             ->all();
     }
@@ -67,10 +71,14 @@ class ProyectoConsultaService
         return $row ? (array) $row : null;
     }
 
-    public function findSerializedForUser(int $userId, int $idProyecto): ?array
+    public function findSerializedForUser(
+        int $userId,
+        int $idProyecto,
+        string $lang = 'es'
+    ): ?array
     {
         $project = $this->findForUser($userId, $idProyecto);
 
-        return $project ? $this->proyectoSerializer->serialize($project) : null;
+        return $project ? $this->proyectoSerializer->serialize($project, null, $lang) : null;
     }
 }

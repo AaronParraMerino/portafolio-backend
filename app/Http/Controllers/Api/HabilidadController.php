@@ -7,11 +7,14 @@ use App\Services\api\HabilidadService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use App\Services\api\ContenidoTraduccionService;
 
 class HabilidadController extends Controller
 {
-    public function __construct(private readonly HabilidadService $habilidadService)
-    {
+    public function __construct(
+        private readonly HabilidadService $habilidadService,
+        private readonly ContenidoTraduccionService $traduccionService
+    ) {
     }
 
     public function catalog(Request $request): JsonResponse
@@ -58,9 +61,13 @@ class HabilidadController extends Controller
         }
     }
 
-    public function indexUserSkills(int $userId): JsonResponse
+    public function indexUserSkills(Request $request, int $userId): JsonResponse
     {
-        $habilidades = $this->habilidadService->getByUserId($userId);
+        $lang = $request->query('lang', 'es');
+
+        $habilidades = collect($this->habilidadService->getByUserId($userId))
+            ->map(fn ($habilidad) => $this->traducirHabilidad($habilidad, $lang))
+            ->values();
 
         return response()->json($habilidades);
     }
@@ -182,4 +189,44 @@ class HabilidadController extends Controller
             'message' => 'Habilidad eliminada correctamente',
         ]);
     }
+
+    private function traducirHabilidad(mixed $habilidad, string $lang): mixed
+    {
+        if (is_object($habilidad) && method_exists($habilidad, 'toArray')) {
+            $habilidad = $habilidad->toArray();
+        }
+
+        if (! is_array($habilidad)) {
+            return $habilidad;
+        }
+
+        $idHabilidad = $habilidad['id_habilidad']
+            ?? $habilidad['habilidad_id']
+            ?? ($habilidad['habilidad']['id_habilidad'] ?? null);
+
+        foreach (['nombre', 'descripcion'] as $campo) {
+            if (array_key_exists($campo, $habilidad)) {
+                $habilidad[$campo] = $this->traduccionService->traducirCampo(
+                    'habilidad',
+                    $idHabilidad,
+                    $campo,
+                    $habilidad[$campo],
+                    $lang
+                );
+            }
+        }
+
+        if (isset($habilidad['habilidad']) && is_array($habilidad['habilidad'])) {
+            $habilidad['habilidad'] = $this->traduccionService->traducirArray(
+                $habilidad['habilidad'],
+                'habilidad',
+                $idHabilidad,
+                ['nombre', 'descripcion'],
+                $lang
+            );
+        }
+
+        return $habilidad;
+    }
+    
 }
