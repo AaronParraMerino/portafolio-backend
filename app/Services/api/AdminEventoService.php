@@ -21,6 +21,7 @@ class AdminEventoService
 
     public function __construct(
         private readonly AdminNotificacionGuardadoService $adminNotificacionGuardadoService,
+        private readonly EventosNotificacionGuardadoService $eventosNotificacionGuardadoService,
         private readonly ProfileImageVariantService $profileImageVariants
     ) {
     }
@@ -270,6 +271,20 @@ class AdminEventoService
         $this->ensureMonthlyLimit($usuario, $startsAt, $event->id_evento);
 
         return DB::transaction(function () use ($usuario, $event, $data, $image): AdminEvento {
+
+            //seccion para notificar a usuarios inscritos
+            $datosAnteriores = [
+                'titulo' => $event->titulo,
+                'descripcion' => $event->descripcion,
+                'tipo' => $event->tipo,
+                'estado' => $event->estado,
+                'fecha_inicio' => $event->fecha_inicio,
+                'fecha_fin' => $event->fecha_fin,
+                'ubicacion' => $event->ubicacion,
+                'cupo' => $event->cupo,
+            ];
+            //fin de seccion de notificar
+
             $event->update($this->eventPayload($data, $usuario->id_usuario, false));
 
             if ($image) {
@@ -277,6 +292,16 @@ class AdminEventoService
             } elseif (($data['imageUrl'] ?? null) === '' || ($data['imagen_url'] ?? null) === '') {
                 $this->deleteCoverImage($event);
             }
+
+            //seccion para notificar a usuarios inscritos
+            $event->refresh();
+
+            $this->notificarCambiosEventoInscrito(
+                usuario: $usuario,
+                event: $event,
+                datosAnteriores: $datosAnteriores
+            );
+            //fin de seccion de notificar
 
             $this->recordHistory(
                 $usuario->id_usuario,
@@ -313,6 +338,16 @@ class AdminEventoService
                 'estado' => $nextStatus,
                 'usuario_actualizador_id' => $admin->id_usuario,
             ]);
+
+            //seccion para notificar a usuarios inscritos
+            $event->refresh();
+
+            $this->notificarCambioEstadoEventoInscrito(
+                usuario: $admin,
+                event: $event,
+                estadoAnterior: $previousStatus
+            );
+            //fin de seccion de notificar
 
             AdminEventoAccion::create([
                 'evento_id' => $event->id_evento,
@@ -863,4 +898,151 @@ class AdminEventoService
             ? $value->format('Y-m-d\TH:i:s')
             : Carbon::parse($value)->format('Y-m-d\TH:i:s');
     }
+
+
+    //seccion para notificar a usuarios inscritos
+
+    /**
+     * Notifica cambios importantes de un evento inscrito
+     */
+    private function notificarCambiosEventoInscrito(
+        Usuario $usuario,
+        AdminEvento $event,
+        array $datosAnteriores
+    ): void {
+        try {
+            $estadoAnterior = (string) ($datosAnteriores['estado'] ?? '');
+            $estadoNuevo = (string) $event->estado;
+
+            if ($estadoAnterior !== $estadoNuevo) {
+                $this->notificarCambioEstadoEventoInscrito(
+                    usuario: $usuario,
+                    event: $event,
+                    estadoAnterior: $estadoAnterior
+                );
+
+                return;
+            }
+
+            $cambioFecha = $this->fechaEventoCambio(
+                $datosAnteriores['fecha_inicio'] ?? null,
+                $event->fecha_inicio
+            ) || $this->fechaEventoCambio(
+                $datosAnteriores['fecha_fin'] ?? null,
+                $event->fecha_fin
+            );
+
+            $cambioUbicacion = $this->textoEventoCambio(
+                $datosAnteriores['ubicacion'] ?? null,
+                $event->ubicacion
+            );
+
+            if ($cambioFecha) {
+                $this->eventosNotificacionGuardadoService->notificarEventoFechaActualizadaInscrito(
+                    evento: $event,
+                    actorId: (int) $usuario->id_usuario
+                );
+            }
+
+            if ($cambioUbicacion) {
+                $this->eventosNotificacionGuardadoService->notificarEventoUbicacionActualizadaInscrito(
+                    evento: $event,
+                    actorId: (int) $usuario->id_usuario
+                );
+            }
+
+            if (! $cambioFecha && ! $cambioUbicacion && $this->hayCambioGeneralEventoInscrito($event, $datosAnteriores)) {
+                $this->eventosNotificacionGuardadoService->notificarEventoActualizadoInscrito(
+                    evento: $event,
+                    actorId: (int) $usuario->id_usuario
+                );
+            }
+        } catch (\Throwable $e) {
+            Log::warning('No se pudo notificar cambios del evento inscrito', [
+                'evento_id' => $event->id_evento,
+                'usuario_actor_id' => $usuario->id_usuario,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Notifica cambio de estado de un evento inscrito
+     */
+    private function notificarCambioEstadoEventoInscrito(
+        Usuario $usuario,
+        AdminEvento $event,
+        string $estadoAnterior
+    ): void {
+        try {
+            $estadoNuevo = (string) $event->estado;
+
+            if ($estadoAnterior === $estadoNuevo) {
+                return;
+            }
+
+            if (in_array($estadoNuevo, ['borrador','pausado', 'suspendido', 'eliminado'], true)) {
+                    $this->eventosNotificacionGuardadoService->notificarEventoNoDisponibleInscrito(
+                    evento: $event,
+                    actorId: (int) $usuario->id_usuario,
+                    estadoNuevo: $estadoNuevo
+                );
+
+                return;
+            }
+
+            if ($estadoNuevo === 'activo' && in_array($estadoAnterior, ['pausado', 'suspendido', 'eliminado', 'borrador'], true)) {
+                $this->eventosNotificacionGuardadoService->notificarEventoReactivadoInscrito(
+                    evento: $event,
+                    actorId: (int) $usuario->id_usuario
+                );
+            }
+        } catch (\Throwable $e) {
+            Log::warning('No se pudo notificar cambio de estado del evento inscrito', [
+                'evento_id' => $event->id_evento,
+                'usuario_actor_id' => $usuario->id_usuario,
+                'estado_anterior' => $estadoAnterior,
+                'estado_nuevo' => $event->estado,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Verifica si cambio una fecha del evento
+     */
+    private function fechaEventoCambio($anterior, $actual): bool
+    {
+        if (! $anterior && ! $actual) {
+            return false;
+        }
+
+        if (! $anterior || ! $actual) {
+            return true;
+        }
+
+        return Carbon::parse($anterior)->toDateTimeString() !== Carbon::parse($actual)->toDateTimeString();
+    }
+
+    /**
+     * Verifica si cambio un texto del evento
+     */
+    private function textoEventoCambio($anterior, $actual): bool
+    {
+        return trim((string) $anterior) !== trim((string) $actual);
+    }
+
+    /**
+     * Verifica si hubo otro cambio general importante
+     */
+    private function hayCambioGeneralEventoInscrito(AdminEvento $event, array $datosAnteriores): bool
+    {
+        return $this->textoEventoCambio($datosAnteriores['titulo'] ?? null, $event->titulo)
+            || $this->textoEventoCambio($datosAnteriores['descripcion'] ?? null, $event->descripcion)
+            || $this->textoEventoCambio($datosAnteriores['tipo'] ?? null, $event->tipo)
+            || (int) ($datosAnteriores['cupo'] ?? 0) !== (int) $event->cupo;
+    }
+
+    //fin de seccion de notificar
+
 }

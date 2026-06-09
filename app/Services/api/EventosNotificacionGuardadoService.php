@@ -120,6 +120,221 @@ class EventosNotificacionGuardadoService
         ];
     }
 
+    //seccion de notificaciones de modificaciones de eventos
+    
+    /**
+     * Notifica a usuarios inscritos cuando un evento fue actualizado
+     */
+    public function notificarEventoActualizadoInscrito(mixed $evento, ?int $actorId = null): array
+    {
+        return $this->guardarNotificacionCambioEventoInscrito(
+            evento: $evento,
+            actorId: $actorId,
+            tipo: 'evento_inscrito_actualizado'
+        );
+    }
+
+    /**
+     * Notifica a usuarios inscritos cuando cambia la fecha u hora del evento
+     */
+    public function notificarEventoFechaActualizadaInscrito(mixed $evento, ?int $actorId = null): array
+    {
+        return $this->guardarNotificacionCambioEventoInscrito(
+            evento: $evento,
+            actorId: $actorId,
+            tipo: 'evento_inscrito_fecha_actualizada'
+        );
+    }
+
+    /**
+     * Notifica a usuarios inscritos cuando cambia la ubicacion del evento
+     */
+    public function notificarEventoUbicacionActualizadaInscrito(mixed $evento, ?int $actorId = null): array
+    {
+        return $this->guardarNotificacionCambioEventoInscrito(
+            evento: $evento,
+            actorId: $actorId,
+            tipo: 'evento_inscrito_ubicacion_actualizada'
+        );
+    }
+
+
+        /**
+         * Notifica a usuarios inscritos cuando un evento ya no esta disponible
+         */
+        public function notificarEventoNoDisponibleInscrito(
+            mixed $evento,
+            ?int $actorId = null,
+            string $estadoNuevo = 'eliminado'
+        ): array {
+            $estadoNuevo = trim(mb_strtolower($estadoNuevo));
+
+            $tipo = match ($estadoNuevo) {
+                'borrador' => 'evento_inscrito_borrador',
+                'pausado' => 'evento_inscrito_pausado',
+                'suspendido' => 'evento_inscrito_suspendido',
+                'eliminado' => 'evento_inscrito_eliminado',
+                default => 'evento_inscrito_no_disponible',
+            };
+
+            return $this->guardarNotificacionCambioEventoInscrito(
+                evento: $evento,
+                actorId: $actorId,
+                tipo: $tipo
+            );
+        }
+
+    /**
+     * Notifica a usuarios inscritos cuando un evento fue reactivado
+     */
+    public function notificarEventoReactivadoInscrito(mixed $evento, ?int $actorId = null): array
+    {
+        return $this->guardarNotificacionCambioEventoInscrito(
+            evento: $evento,
+            actorId: $actorId,
+            tipo: 'evento_inscrito_reactivado'
+        );
+    }
+
+    /**
+     * Guarda una nueva notificacion importante de evento inscrito
+     */
+    private function guardarNotificacionCambioEventoInscrito(
+        mixed $evento,
+        ?int $actorId,
+        string $tipo
+    ): array {
+        if (! $evento) {
+            return $this->error('El evento inscrito no existe');
+        }
+
+        $idEvento = (int) $this->valor($evento, 'id_evento');
+        $tituloEvento = trim((string) $this->valor($evento, 'titulo'));
+
+        if ($idEvento <= 0 || $tituloEvento === '') {
+            return $this->error('Datos insuficientes del evento inscrito');
+        }
+
+        $usuarios = $this->usuariosInscritosActivosEvento(
+            idEvento: $idEvento,
+            actorId: $actorId
+        );
+
+        if (empty($usuarios)) {
+            return $this->sinAccion('El evento no tiene usuarios inscritos activos');
+        }
+
+        $mensaje = $this->crearMensajeCambioEventoInscrito(
+            tipo: $tipo,
+            tituloEvento: $tituloEvento,
+            evento: $evento
+        );
+
+        $contextoReferencia = 'evento_inscrito_' . $idEvento;
+
+        return $this->crearNuevaParaUsuarios([
+            'id_usuario_actor' => $actorId,
+
+            'modulo' => 'eventos',
+            'contexto_tipo' => 'evento_inscrito',
+            'contexto_referencia' => $contextoReferencia,
+            'grupo_titulo' => $tituloEvento,
+
+            'tipo' => $tipo,
+            'mensaje' => $mensaje,
+        ], $usuarios);
+    }
+
+    /**
+     * Obtiene usuarios inscritos activos de un evento
+     */
+    private function usuariosInscritosActivosEvento(int $idEvento, ?int $actorId = null): array
+    {
+        return EventoInscripcion::query()
+            ->where('evento_id', $idEvento)
+            ->where('estado', 'inscrito')
+            ->whereNull('fecha_desinscripcion')
+            ->pluck('usuario_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0 && ($actorId === null || $id !== $actorId))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Crea el mensaje segun el tipo de cambio del evento inscrito
+     */
+    private function crearMensajeCambioEventoInscrito(
+        string $tipo,
+        string $tituloEvento,
+        mixed $evento
+    ): string {
+        return match ($tipo) {
+            'evento_inscrito_fecha_actualizada' =>
+                $this->mensajeFechaActualizadaEventoInscrito($tituloEvento, $evento),
+
+            'evento_inscrito_ubicacion_actualizada' =>
+                $this->mensajeUbicacionActualizadaEventoInscrito($tituloEvento, $evento),
+
+            'evento_inscrito_borrador' =>
+                'El evento ' . $tituloEvento . ' ya no está disponible.',
+
+            'evento_inscrito_pausado' =>
+                'El evento ' . $tituloEvento . ' fue pausado temporalmente.',
+
+            'evento_inscrito_suspendido' =>
+                'El evento ' . $tituloEvento . ' fue suspendido.',
+
+            'evento_inscrito_eliminado',
+            'evento_inscrito_cancelado' =>
+                'El evento ' . $tituloEvento . ' fue cancelado.',
+
+            'evento_inscrito_no_disponible' =>
+                'El evento ' . $tituloEvento . ' ya no está disponible.',
+
+            'evento_inscrito_reactivado' =>
+                'El evento ' . $tituloEvento . ' vuelve a estar disponible.',
+
+            default =>
+                'El evento ' . $tituloEvento . ' fue actualizado.',
+        };
+    }
+
+    /**
+     * Crea mensaje cuando cambia la fecha u hora del evento inscrito
+     */
+    private function mensajeFechaActualizadaEventoInscrito(string $tituloEvento, mixed $evento): string
+    {
+        $fechaInicio = $this->valor($evento, 'fecha_inicio');
+
+        if (! $fechaInicio) {
+            return 'El evento ' . $tituloEvento . ' cambió de fecha u hora.';
+        }
+
+        $fecha = Carbon::parse($fechaInicio)->format('d/m/Y');
+        $hora = Carbon::parse($fechaInicio)->format('H:i');
+
+        return 'El evento ' . $tituloEvento . ' fue reprogramado para el ' . $fecha . ' a las ' . $hora . '.';
+    }
+
+    /**
+     * Crea mensaje cuando cambia la ubicacion del evento inscrito
+     */
+    private function mensajeUbicacionActualizadaEventoInscrito(string $tituloEvento, mixed $evento): string
+    {
+        $ubicacion = trim((string) $this->valor($evento, 'ubicacion'));
+
+        if ($ubicacion === '') {
+            return 'La ubicación del evento ' . $tituloEvento . ' fue actualizada.';
+        }
+
+        return 'La ubicación del evento ' . $tituloEvento . ' fue actualizada: ' . $ubicacion . '.';
+    }
+
+   ///fin seccion de notificaciones de modificaciones de eventos inscritos
+
+
     /**
      * Busca eventos personales solo de hoy o el dia siguiente
      */
@@ -359,6 +574,78 @@ class EventosNotificacionGuardadoService
             data: $data,
             usuarios: [(int) $data['id_usuario']]
         );
+    }
+
+    /**
+     * Crea una nueva notificación y la relaciona con varios usuarios
+     */
+    private function crearNuevaParaUsuarios(array $data, array $usuarios): array
+    {
+        $validacion = $this->validarDatos($data, false);
+
+        if (! $validacion['status']) {
+            return $validacion;
+        }
+
+        $usuarios = collect($usuarios)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($usuarios)) {
+            return $this->sinAccion('No hay usuarios destinatarios validos');
+        }
+
+        try {
+            $resultado = DB::transaction(function () use ($data, $usuarios): array {
+                $notificacion = Notificacion::create([
+                    'id_usuario_actor' => $data['id_usuario_actor'] ?? null,
+                    'modulo' => trim((string) $data['modulo']),
+                    'contexto_tipo' => trim((string) $data['contexto_tipo']),
+                    'contexto_referencia' => trim((string) $data['contexto_referencia']),
+                    'grupo_titulo' => trim((string) $data['grupo_titulo']),
+                    'tipo' => trim((string) $data['tipo']),
+                    'mensaje' => trim((string) $data['mensaje']),
+                ]);
+
+                $now = now();
+
+                $registros = collect($usuarios)
+                    ->map(fn ($idUsuario) => [
+                        'id_notificacion' => $notificacion->id_notificacion,
+                        'id_usuario' => $idUsuario,
+                        'leido_en' => null,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ])
+                    ->all();
+
+                NotificacionUsuario::insert($registros);
+
+                return [
+                    'notificacion' => $notificacion->fresh(),
+                    'fue_creada' => true,
+                    'fue_actualizada' => false,
+                    'destinatarios' => count($usuarios),
+                ];
+            });
+
+            return [
+                'status' => true,
+                'message' => 'Notificación guardada correctamente',
+                'notificacion' => $resultado['notificacion'],
+                'fue_creada' => $resultado['fue_creada'],
+                'fue_actualizada' => $resultado['fue_actualizada'],
+                'destinatarios' => $resultado['destinatarios'],
+                'errores' => [],
+            ];
+        } catch (QueryException $e) {
+            return $this->error('Error al guardar la notificación', $e);
+        } catch (\Throwable $e) {
+            return $this->error('Error al guardar la notificación', $e);
+        }
     }
 
     /**
