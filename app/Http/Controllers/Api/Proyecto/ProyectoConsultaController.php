@@ -18,14 +18,21 @@ class ProyectoConsultaController extends Controller
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
-        return response()->json(['data' => $this->proyectoConsultaService->listByUser($userId)]);
+        $lang = $request->query('lang', 'es');
+
+        return response()->json([
+            'data' => $this->proyectoConsultaService->listByUser($userId, $lang)
+        ]);
     }
 
     public function show(Request $request, int $id): JsonResponse
     {
+        $lang = $request->query('lang', 'es');
+
         $project = $this->proyectoConsultaService->findSerializedForUser(
             (int) ($request->user()->id_usuario ?? 0),
-            $id
+            $id,
+            $lang
         );
 
         if (! $project) {
