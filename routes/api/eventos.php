@@ -8,7 +8,7 @@ use App\Http\Controllers\Api\EventoInscripcionController;
 
 Route::get('eventos/publicos', [EventoInscripcionController::class, 'publicos']);
 
-Route::prefix('eventos')->middleware('auth:sanctum')->group(function () {
+Route::prefix('eventos')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
 
     // Lista eventos visibles para el home del usuario
     Route::get('{userId}', [EventoInscripcionController::class, 'index']);

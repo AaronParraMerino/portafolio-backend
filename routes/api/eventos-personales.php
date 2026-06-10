@@ -3,7 +3,7 @@
 use App\Http\Controllers\Api\EventoPersonalController;
 use Illuminate\Support\Facades\Route;
 
-Route::prefix('eventos-personales')->middleware('auth:sanctum')->group(function () {
+Route::prefix('eventos-personales')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
     Route::get('/', [EventoPersonalController::class, 'index']);
     Route::post('/', [EventoPersonalController::class, 'store']);
     Route::put('/{id}', [EventoPersonalController::class, 'update'])->whereNumber('id');

@@ -2,7 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 
-Route::prefix('administrador')->middleware('auth:sanctum')->group(function () {
+Route::prefix('administrador')->middleware(['auth:sanctum', 'account.writable'])->group(function () {
     require __DIR__ . '/administrador/bitacoras.php';
     require __DIR__ . '/administrador/usuarios.php';
     require __DIR__ . '/administrador/sesiones.php';

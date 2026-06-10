@@ -459,9 +459,8 @@ private function blockedAccountResult(Usuario $usuario): array
     $razon = $usuario->notificaciones()
         ->where('modulo', 'administracion')
         ->where('tipo', 'admin_notice_seguridad')
-        ->where('titulo', 'Cuenta bloqueada')
-        ->latest('created_at')
-        ->value('contenido');
+        ->latest('notificaciones.created_at')
+        ->value('notificaciones.mensaje');
 
     return [
         'status' => 'blocked',
@@ -478,9 +477,8 @@ public function decorateAccountState(Usuario $usuario): Usuario
     $razon = $usuario->notificaciones()
         ->where('modulo', 'administracion')
         ->where('tipo', 'admin_notice_cuenta')
-        ->where('titulo', 'Cuenta en pausa')
-        ->latest('created_at')
-        ->value('contenido');
+        ->latest('notificaciones.created_at')
+        ->value('notificaciones.mensaje');
 
     $usuario->setAttribute(
         'razon_pausa',
