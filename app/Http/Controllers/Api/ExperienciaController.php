@@ -17,6 +17,11 @@ class ExperienciaController extends Controller
     ) {
     }
 
+    public function catalog(): JsonResponse
+    {
+        return response()->json($this->experienciaService->getCatalog());
+    }
+
     public function index(Request $request, int $userId): JsonResponse
     {
         $lang = $request->query('lang', 'es');
@@ -45,9 +50,9 @@ class ExperienciaController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'tipo' => ['required', 'in:laboral,academica'],
-            'institucion' => ['required', 'string', 'max:150'],
-            'cargo' => ['required', 'string', 'max:150'],
-            'descripcion' => ['nullable', 'string'],
+            'institucion' => ['required', 'string', 'min:2', 'max:60', 'regex:/^[\pL0-9][\pL0-9\s.,&\/#+()\-]*$/u'],
+            'cargo' => ['required', 'string', 'min:2', 'max:80', 'regex:/^[\pL0-9][\pL0-9\s.,&\/#+()\-]*$/u'],
+            'descripcion' => ['nullable', 'string', 'max:200'],
             'fecha_inicio' => ['required', 'date'],
             'fecha_fin' => ['nullable', 'date', 'after_or_equal:fecha_inicio'],
             'es_actual' => ['sometimes', 'boolean'],
@@ -62,7 +67,14 @@ class ExperienciaController extends Controller
         }
 
         $data = $validator->validated();
-        $experiencia = $this->experienciaService->create($userId, $data);
+
+        try {
+            $experiencia = $this->experienciaService->create($userId, $data);
+        } catch (\RuntimeException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        }
 
         return response()->json([
             'message' => 'Experiencia creada correctamente',
@@ -82,9 +94,9 @@ class ExperienciaController extends Controller
 
         $validator = Validator::make($request->all(), [
             'tipo' => ['sometimes', 'in:laboral,academica'],
-            'institucion' => ['sometimes', 'string', 'max:150'],
-            'cargo' => ['sometimes', 'string', 'max:150'],
-            'descripcion' => ['nullable', 'string'],
+            'institucion' => ['sometimes', 'string', 'min:2', 'max:60', 'regex:/^[\pL0-9][\pL0-9\s.,&\/#+()\-]*$/u'],
+            'cargo' => ['sometimes', 'string', 'min:2', 'max:80', 'regex:/^[\pL0-9][\pL0-9\s.,&\/#+()\-]*$/u'],
+            'descripcion' => ['nullable', 'string', 'max:200'],
             'fecha_inicio' => ['sometimes', 'date'],
             'fecha_fin' => ['nullable', 'date'],
             'es_actual' => ['sometimes', 'boolean'],
@@ -116,7 +128,13 @@ class ExperienciaController extends Controller
             ], 422);
         }
 
-        $experiencia = $this->experienciaService->update($experiencia, $data);
+        try {
+            $experiencia = $this->experienciaService->update($experiencia, $data);
+        } catch (\RuntimeException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        }
 
         return response()->json([
             'message' => 'Experiencia actualizada correctamente',

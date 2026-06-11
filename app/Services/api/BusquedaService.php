@@ -1200,13 +1200,15 @@ class BusquedaService
     public function getCargosExperiencia()
     {
         return DB::table('experiencias as ex')
-            ->select('ex.cargo')
             ->whereRaw('ex.es_publico IS TRUE')
             ->whereNotNull('ex.cargo')
             ->where('ex.cargo', '<>', '')
-            ->distinct()
             ->orderBy('ex.cargo')
-            ->pluck('ex.cargo');
+            ->pluck('ex.cargo')
+            ->map(fn ($cargo) => trim(preg_replace('/\s+/u', ' ', (string) $cargo)))
+            ->filter()
+            ->unique(fn ($cargo) => Str::lower(Str::ascii($cargo)))
+            ->values();
     }
 
     /** Lista tecnologias de proyectos */
