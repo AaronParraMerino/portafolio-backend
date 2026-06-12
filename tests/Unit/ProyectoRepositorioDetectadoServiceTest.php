@@ -119,6 +119,25 @@ class ProyectoRepositorioDetectadoServiceTest extends TestCase
         $this->assertSame(0, $detected['recuperacion']['propietarios_validados_total']);
     }
 
+    public function test_active_open_project_is_not_advertised_without_validated_repository_relation(): void
+    {
+        $user = Usuario::factory()->create();
+        $projectId = $this->createActiveProject('Proyecto de acceso por URL');
+        $this->createRepository($projectId, 'github', 'shared');
+        DB::table('proyecto_configuraciones')->insert([
+            'id_proyecto' => $projectId,
+            'permitir_participantes_sin_validacion' => 'true',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $detected = $this->service()
+            ->reposForUser($user->id_usuario, 'github')
+            ->firstWhere('id_proyecto', $projectId);
+
+        $this->assertNull($detected);
+    }
+
     private function service(): ProyectoRepositorioDetectadoService
     {
         return new ProyectoRepositorioDetectadoService();
@@ -129,6 +148,15 @@ class ProyectoRepositorioDetectadoServiceTest extends TestCase
         return (int) DB::table('proyectos')->insertGetId([
             'titulo' => $title,
             'deleted_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], 'id_proyecto');
+    }
+
+    private function createActiveProject(string $title): int
+    {
+        return (int) DB::table('proyectos')->insertGetId([
+            'titulo' => $title,
             'created_at' => now(),
             'updated_at' => now(),
         ], 'id_proyecto');

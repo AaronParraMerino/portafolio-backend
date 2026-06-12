@@ -25,14 +25,7 @@ class ProyectoRepositorioDetectadoService
                 $repoAssigned = ! is_null($row->id_proyecto);
                 $projectDeleted = $repoAssigned && ! is_null($row->proyecto_deleted_at);
                 $validated = $this->databaseBool($row->validado ?? false);
-                $allowsUnvalidated = $repoAssigned
-                    && ! $projectDeleted
-                    && $this->databaseBool($row->permitir_participantes_sin_validacion ?? false);
-
-                if ($projectDeleted && ! $validated) {
-                    return null;
-                }
-                if (! $validated && ! $allowsUnvalidated) {
+                if (! $validated) {
                     return null;
                 }
                 if ($repoAssigned && ! $projectDeleted && ! is_null($row->id_participacion)) {
@@ -56,7 +49,7 @@ class ProyectoRepositorioDetectadoService
                         : ($repoAssigned ? 'en_uso' : 'libre'),
                     'puede_unirse' => $repoAssigned
                         && ! $projectDeleted
-                        && ($validated || $allowsUnvalidated),
+                        && $validated,
                     'proyecto' => $repoAssigned ? [
                         'id_proyecto' => $row->id_proyecto,
                         'titulo' => $row->proyecto_titulo,
@@ -133,13 +126,7 @@ class ProyectoRepositorioDetectadoService
             ->leftJoin('proyecto_configuraciones as pc', 'pc.id_proyecto', '=', 'pr.id_proyecto')
             ->where('pr.proveedor', $provider)
             ->whereNull('pr.deleted_at')
-            ->where(function ($query) {
-                $query->whereRaw('urv.validado = TRUE')
-                    ->orWhere(function ($assigned) {
-                        $assigned->whereNotNull('pr.id_proyecto')
-                            ->whereNull('p.deleted_at');
-                    });
-            })
+            ->whereRaw('urv.validado = TRUE')
             ->select([
                 'pr.id_proyecto_repositorio',
                 'pr.id_proyecto',
