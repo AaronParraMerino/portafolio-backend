@@ -608,6 +608,11 @@ class NotificacionService
             'n.mensaje',
             'n.contexto_referencia',
             'n.grupo_titulo',
+            'n.accion_estado',
+            'n.accion_respuesta',
+            'n.accion_respondida_at',
+            'n.accion_disponible_nuevamente_at',
+            'n.metadata',
             'n.created_at',
             'nu.leido_en',
             'actor.nombre as actor_nombre',
@@ -630,6 +635,13 @@ class NotificacionService
             'mensaje' => $row->mensaje,
             'contexto_referencia' => $row->contexto_referencia,
             'grupo_titulo' => $row->grupo_titulo,
+            'accion_estado' => $row->accion_estado,
+            'accion_respuesta' => $row->accion_respuesta,
+            'accion_respondida_at' => $row->accion_respondida_at,
+            'accion_disponible_nuevamente_at' => $row->accion_disponible_nuevamente_at,
+            'metadata' => is_string($row->metadata)
+                ? (json_decode($row->metadata, true) ?: [])
+                : ($row->metadata ?? []),
             'created_at' => $row->created_at,
             'leido_en' => $row->leido_en,
             'actor' => $row->id_usuario_actor ? [

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Auth;
 use App\Services\api\Auth\OAuthProviderAuthorizationService;
 use App\Services\api\AuthService;
 use App\Services\api\GithubRepositorySyncService;
+use App\Services\api\Proyecto\ProyectoRepositorioDetectadoService;
 use App\Services\api\SeccionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ class GithubAuthController extends ProviderOAuthController
         SeccionService $seccionService,
         private readonly GithubRepositorySyncService $githubRepositorySyncService,
         private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
+        private readonly ProyectoRepositorioDetectadoService $proyectoRepositorioDetectadoService,
     ) {
         parent::__construct($authService, $authorizationService, $seccionService);
     }
@@ -63,11 +65,12 @@ class GithubAuthController extends ProviderOAuthController
             return $refreshResponse;
         }
 
-        $repos = $this->getDetectedReposForUsuario((int) $user->id_usuario);
+        $repos = $this->proyectoRepositorioDetectadoService->reposForUser((int) $user->id_usuario, 'github');
 
         return response()->json([
             'status' => 'success',
             'data' => $repos,
+            'deleted_projects' => $this->proyectoRepositorioDetectadoService->deletedProjectGroups($repos),
         ]);
     }
 
@@ -87,7 +90,7 @@ class GithubAuthController extends ProviderOAuthController
 
         return response()->json([
             'status' => 'success',
-            'count' => $this->getDetectedReposForUsuario((int) $user->id_usuario, true),
+            'count' => $this->proyectoRepositorioDetectadoService->reposForUser((int) $user->id_usuario, 'github')->count(),
         ]);
     }
 

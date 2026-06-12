@@ -23,6 +23,18 @@ class Notificacion extends Model
         'grupo_titulo',
         'tipo',
         'mensaje',
+        'accion_estado',
+        'accion_respuesta',
+        'accion_respuesta_usuario_id',
+        'accion_respondida_at',
+        'accion_disponible_nuevamente_at',
+        'metadata',
+    ];
+
+    protected $casts = [
+        'accion_respondida_at' => 'datetime',
+        'accion_disponible_nuevamente_at' => 'datetime',
+        'metadata' => 'array',
     ];
 
     public function usuarioActor()

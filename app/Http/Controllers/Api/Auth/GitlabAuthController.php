@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Auth;
 use App\Services\api\Auth\OAuthProviderAuthorizationService;
 use App\Services\api\AuthService;
 use App\Services\api\GitlabRepositorySyncService;
+use App\Services\api\Proyecto\ProyectoRepositorioDetectadoService;
 use App\Services\api\SeccionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ class GitlabAuthController extends ProviderOAuthController
         SeccionService $seccionService,
         private readonly GitlabRepositorySyncService $gitlabRepositorySyncService,
          private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
+        private readonly ProyectoRepositorioDetectadoService $proyectoRepositorioDetectadoService,
     ) {
         parent::__construct($authService, $authorizationService, $seccionService);
     }
@@ -64,9 +66,12 @@ class GitlabAuthController extends ProviderOAuthController
             return $refreshResponse;
         }
 
+        $repos = $this->proyectoRepositorioDetectadoService->reposForUser((int) $user->id_usuario, 'gitlab');
+
         return response()->json([
             'status' => 'success',
-            'data' => $this->getDetectedReposForUsuario((int) $user->id_usuario),
+            'data' => $repos,
+            'deleted_projects' => $this->proyectoRepositorioDetectadoService->deletedProjectGroups($repos),
         ]);
     }
 
@@ -86,7 +91,7 @@ class GitlabAuthController extends ProviderOAuthController
 
         return response()->json([
             'status' => 'success',
-            'count' => $this->getDetectedReposForUsuario((int) $user->id_usuario, true),
+            'count' => $this->proyectoRepositorioDetectadoService->reposForUser((int) $user->id_usuario, 'gitlab')->count(),
         ]);
     }
 

@@ -8,4 +8,5 @@ Route::get('/usuario/{userId}', [ProyectoConsultaController::class, 'indexByUsua
 Route::get('/{id}', [ProyectoConsultaController::class, 'show']);
 Route::post('/', [ProyectoCrudController::class, 'store']);
 Route::put('/{id}', [ProyectoCrudController::class, 'update']);
+Route::get('/{id}/deletion-preview', [ProyectoCrudController::class, 'deletionPreview']);
 Route::delete('/{id}', [ProyectoCrudController::class, 'destroy']);

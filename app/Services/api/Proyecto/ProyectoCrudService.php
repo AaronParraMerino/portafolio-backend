@@ -163,19 +163,6 @@ class ProyectoCrudService
         return $this->serializedProject($userId, $idProyecto);
     }
 
-    public function delete(int $userId, int $idProyecto): void
-    {
-        DB::table('proyectos')->where('id_proyecto', $idProyecto)->update([
-            'deleted_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        $this->proyectoNotificacionGuardadoService->notificarProyectoEliminado(
-            idProyecto: $idProyecto,
-            idUsuarioActor: $userId
-        );
-    }
-
     private function serializedProject(int $userId, int $idProyecto): array
     {
         return $this->proyectoSerializer->serialize(

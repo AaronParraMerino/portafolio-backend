@@ -10,4 +10,5 @@ Route::prefix('projects')->middleware(['auth:sanctum', 'account.writable'])->gro
     require __DIR__ . '/proyectos/configuracion.php';
     require __DIR__ . '/proyectos/enlaces.php';
     require __DIR__ . '/proyectos/multimedia.php';
+    require __DIR__ . '/proyectos/restauracion.php';
 });
