@@ -7,6 +7,7 @@ use App\Services\api\ProyectoNotificacionGuardadoService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 class ProyectoMediaService
 {
@@ -65,7 +66,7 @@ class ProyectoMediaService
         return $saved;
     }
 
-    public function deleteImages(int $idProyecto, int $userId, array $urls): bool
+    public function deleteImages(int $idProyecto, int $userId, array $urls): int
     {
         $rows = DB::table('proyecto_evidencias')
             ->where('id_proyecto', $idProyecto)
@@ -79,8 +80,7 @@ class ProyectoMediaService
             $rowPath = (string) ($row->archivo_path ?? '');
 
             foreach ($urls as $candidate) {
-                $normalizedCandidatePath = $this->normalizeStoragePathFromUrl((string) $candidate);
-                if ($candidate === $rowUrl || ($normalizedCandidatePath && $normalizedCandidatePath === $rowPath)) {
+                if ($this->imageCandidateMatches((string) $candidate, $rowUrl, $rowPath)) {
                     if ($rowUrl) {
                         $this->profileImageVariants->deleteProjectVariants($rowUrl);
                     }
@@ -92,13 +92,16 @@ class ProyectoMediaService
         }
 
         if ($toDeleteIds === []) {
-            return false;
+            return 0;
         }
 
-        DB::table('proyecto_evidencias')->whereIn('id_evidencia', $toDeleteIds)->update([
-            'deleted_at' => now(),
-            'updated_at' => now(),
-        ]);
+        DB::transaction(function () use ($idProyecto, $toDeleteIds) {
+            DB::table('proyecto_evidencias')->whereIn('id_evidencia', $toDeleteIds)->update([
+                'deleted_at' => now(),
+                'updated_at' => now(),
+            ]);
+            $this->ensureImageCover($idProyecto);
+        });
 
         $this->proyectoNotificacionGuardadoService->notificarMaterialesProyectoActualizados(
             idProyecto: $idProyecto,
@@ -107,7 +110,41 @@ class ProyectoMediaService
             accion: 'eliminado'
         );
 
-        return true;
+        return count($toDeleteIds);
+    }
+
+    public function repairImageVariants(int $idProyecto, string $originalUrl): array
+    {
+        $row = DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $idProyecto)
+            ->whereIn('tipo', [self::TIPO_IMAGEN, 'captura'])
+            ->whereNull('deleted_at')
+            ->where('url', $originalUrl)
+            ->first();
+
+        if (! $row) {
+            return ['status' => 'not_found'];
+        }
+
+        if (! $this->profileImageVariants->originalExists($originalUrl)) {
+            $this->profileImageVariants->deleteProjectVariants($originalUrl);
+            DB::transaction(function () use ($idProyecto, $row) {
+                DB::table('proyecto_evidencias')
+                    ->where('id_evidencia', $row->id_evidencia)
+                    ->update([
+                        'deleted_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                $this->ensureImageCover($idProyecto);
+            });
+
+            return ['status' => 'original_missing'];
+        }
+
+        return [
+            'status' => 'repaired',
+            'variants' => $this->profileImageVariants->generateProjectFromUrl($originalUrl),
+        ];
     }
 
     public function uploadDocuments(int $idProyecto, int $userId, array $files): array
@@ -162,7 +199,7 @@ class ProyectoMediaService
         return $docs;
     }
 
-    public function deleteDocuments(int $idProyecto, int $userId, array $urls): bool
+    public function deleteDocuments(int $idProyecto, int $userId, array $urls): int
     {
         $rows = DB::table('proyecto_evidencias')
             ->where('id_proyecto', $idProyecto)
@@ -178,9 +215,7 @@ class ProyectoMediaService
             foreach ($urls as $candidate) {
                 $normalizedCandidatePath = $this->normalizeStoragePathFromUrl((string) $candidate);
                 if ($candidate === $rowUrl || ($normalizedCandidatePath && $normalizedCandidatePath === $rowPath)) {
-                    if ($rowPath) {
-                        $this->deleteProjectFile($rowPath, $rowUrl);
-                    }
+                    $this->deleteProjectFile($rowPath ?: null, $rowUrl);
                     $toDeleteIds[] = $row->id_evidencia;
                     break;
                 }
@@ -188,7 +223,7 @@ class ProyectoMediaService
         }
 
         if ($toDeleteIds === []) {
-            return false;
+            return 0;
         }
 
         DB::table('proyecto_evidencias')->whereIn('id_evidencia', $toDeleteIds)->update([
@@ -203,7 +238,42 @@ class ProyectoMediaService
             accion: 'eliminado'
         );
 
-        return true;
+        return count($toDeleteIds);
+    }
+
+    private function imageCandidateMatches(string $candidate, string $originalUrl, string $originalPath): bool
+    {
+        if ($candidate === $originalUrl) {
+            return true;
+        }
+
+        $candidatePath = $this->normalizeStoragePathFromUrl($candidate);
+        if ($candidatePath && $candidatePath === $originalPath) {
+            return true;
+        }
+
+        return in_array($candidate, $this->profileImageVariants->getProjectVariantUrls($originalUrl), true);
+    }
+
+    private function ensureImageCover(int $idProyecto): void
+    {
+        $images = DB::table('proyecto_evidencias')
+            ->where('id_proyecto', $idProyecto)
+            ->whereIn('tipo', [self::TIPO_IMAGEN, 'captura'])
+            ->whereNull('deleted_at')
+            ->orderBy('orden')
+            ->orderBy('id_evidencia')
+            ->get(['id_evidencia', 'es_portada']);
+
+        if ($images->isEmpty() || $images->contains(
+            fn ($image) => filter_var($image->es_portada, FILTER_VALIDATE_BOOLEAN)
+        )) {
+            return;
+        }
+
+        DB::table('proyecto_evidencias')
+            ->where('id_evidencia', $images->first()->id_evidencia)
+            ->update(['es_portada' => DB::raw('TRUE'), 'updated_at' => now()]);
     }
 
     private function normalizeStoragePathFromUrl(string $url): ?string
@@ -283,6 +353,10 @@ class ProyectoMediaService
         $key = env('SUPABASE_KEY');
 
         if (! $bucket || ! $urlBase || ! $key) {
+            if (trim((string) $path) !== '') {
+                throw new RuntimeException('Supabase Storage no esta configurado para eliminar el archivo original.');
+            }
+
             return;
         }
 
@@ -311,7 +385,16 @@ class ProyectoMediaService
             ],
         ]);
 
-        curl_exec($ch);
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
+        $payload = is_string($response) ? json_decode($response, true) : null;
+        $notFound = $status === 404 || (int) ($payload['statusCode'] ?? 0) === 404;
+
+        if ($error || (! $notFound && ($status < 200 || $status >= 300))) {
+            throw new RuntimeException('No se pudo eliminar el archivo original de Supabase Storage.');
+        }
     }
 }

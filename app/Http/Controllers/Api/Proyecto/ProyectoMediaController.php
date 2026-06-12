@@ -56,14 +56,45 @@ class ProyectoMediaController extends Controller
             return response()->json(['message' => 'Sin imágenes para eliminar']);
         }
 
-        $this->proyectoMediaService->deleteImages($id, $this->userId($request), $urls);
+        $deleted = $this->proyectoMediaService->deleteImages($id, $this->userId($request), $urls);
 
-        return response()->json(['message' => 'Imágenes eliminadas correctamente']);
+        if ($deleted === 0) {
+            return response()->json(['message' => 'No se encontraron imágenes activas para eliminar'], 422);
+        }
+
+        return response()->json([
+            'message' => 'Imágenes eliminadas correctamente',
+            'eliminadas' => $deleted,
+        ]);
     }
 
     public function reorderImages(Request $request, int $id): JsonResponse
     {
         return response()->json(['message' => 'Reordenado no implementado', 'ok' => true]);
+    }
+
+    public function repairImageVariants(Request $request, int $id): JsonResponse
+    {
+        if ($response = $this->authorizeEdition($request, $id)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'original_url' => 'required|string|url|max:1000',
+        ]);
+        $result = $this->proyectoMediaService->repairImageVariants($id, $data['original_url']);
+
+        return match ($result['status']) {
+            'repaired' => response()->json([
+                'message' => 'Variantes generadas correctamente',
+                'data' => $result,
+            ]),
+            'original_missing' => response()->json([
+                'message' => 'La imagen original ya no existe; se retiró la evidencia perdida',
+                'data' => $result,
+            ]),
+            default => response()->json(['message' => 'Imagen no encontrada en el proyecto'], 404),
+        };
     }
 
     public function uploadDocuments(Request $request, int $id): JsonResponse
@@ -111,9 +142,16 @@ class ProyectoMediaController extends Controller
             return response()->json(['message' => 'Sin documentos para eliminar']);
         }
 
-        $this->proyectoMediaService->deleteDocuments($id, $this->userId($request), $urls);
+        $deleted = $this->proyectoMediaService->deleteDocuments($id, $this->userId($request), $urls);
 
-        return response()->json(['message' => 'Documentos eliminados correctamente']);
+        if ($deleted === 0) {
+            return response()->json(['message' => 'No se encontraron documentos activos para eliminar'], 422);
+        }
+
+        return response()->json([
+            'message' => 'Documentos eliminados correctamente',
+            'eliminados' => $deleted,
+        ]);
     }
 
     public function reorderDocuments(Request $request, int $id): JsonResponse

@@ -105,6 +105,32 @@ class ProfileImageVariantService
         return $this->generateUrl($originalUrl, 'project');
     }
 
+    public function originalExists(string $url): bool
+    {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => ['Range: bytes=0-0'],
+        ]);
+
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $payload = is_string($response) ? json_decode($response, true) : null;
+        if ($status === 404 || (int) ($payload['statusCode'] ?? 0) === 404) {
+            return false;
+        }
+
+        if ($error || $status < 200 || $status >= 300 || ! is_string($response)) {
+            throw new RuntimeException('No se pudo comprobar la imagen original.');
+        }
+
+        return true;
+    }
+
     public function deleteVariants(?string $originalUrl): void
     {
         $this->deleteProfileVariants($originalUrl);
@@ -314,8 +340,17 @@ class ProfileImageVariantService
             ],
         ]);
 
-        curl_exec($ch);
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
+        $payload = is_string($response) ? json_decode($response, true) : null;
+        $notFound = $status === 404 || (int) ($payload['statusCode'] ?? 0) === 404;
+
+        if ($error || (! $notFound && ($status < 200 || $status >= 300))) {
+            throw new RuntimeException('No se pudo eliminar una variante de imagen de Supabase Storage.');
+        }
     }
 
     private function download(string $url): string
