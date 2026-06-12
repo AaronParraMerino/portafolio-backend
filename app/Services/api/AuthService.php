@@ -10,6 +10,7 @@ use App\Services\api\Auth\GitlabOAuthService;
 use App\Services\api\Auth\GoogleOAuthService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use App\Models\CuentaOauth;
 use Illuminate\Support\Str;
 
@@ -21,6 +22,7 @@ class AuthService
         private readonly GithubOAuthService $githubOAuthService,
         private readonly GitlabOAuthService $gitlabOAuthService,
         private readonly DiscordOAuthService $discordOAuthService,
+        private readonly ?ProfileImageVariantService $profileImageVariants = null,
     ) {
     }
 
@@ -470,6 +472,35 @@ private function blockedAccountResult(Usuario $usuario): array
 
 public function decorateAccountState(Usuario $usuario): Usuario
 {
+    if (Schema::hasTable('perfiles') && Schema::hasTable('cuentas_oauth')) {
+        $usuario->loadMissing([
+            'perfil:id_perfil,usuario_id,foto_perfil',
+            'cuentasOauth:id_cuenta_oauth,usuario_id,provider,foto_url',
+        ]);
+
+        $profileAvatar = ($this->profileImageVariants ?? app(ProfileImageVariantService::class))->getVariantUrl(
+            $usuario->perfil?->foto_perfil,
+            'thumb'
+        ) ?? $usuario->perfil?->foto_perfil;
+
+        $oauthAvatar = null;
+
+        foreach (['google', 'github', 'gitlab', 'discord'] as $provider) {
+            $oauthAvatar = $usuario->cuentasOauth
+                ->first(fn (CuentaOauth $account) => $account->provider === $provider && $account->foto_url)
+                ?->foto_url;
+
+            if ($oauthAvatar) {
+                break;
+            }
+        }
+
+        $usuario->setAttribute('avatar_url', $profileAvatar ?: $oauthAvatar);
+        $usuario->setAttribute('avatar_source', $profileAvatar ? 'profile' : ($oauthAvatar ? 'oauth' : null));
+        $usuario->unsetRelation('perfil');
+        $usuario->unsetRelation('cuentasOauth');
+    }
+
     if ($usuario->estado !== 'pausado') {
         return $usuario;
     }

@@ -2,6 +2,7 @@
 
 namespace App\Services\api;
 
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -485,7 +486,7 @@ class NotificacionService
                     'contexto_referencia' => $row->contexto_referencia,
                     'titulo' => $row->grupo_titulo ?: 'Sin grupo',
                     'cantidad' => (int) $row->cantidad,
-                    'ultimo_leido_en' => $row->ultimo_leido_en,
+                    'ultimo_leido_en' => $this->formatUtcDateTime($row->ultimo_leido_en),
                 ];
             })
             ->values()
@@ -637,13 +638,13 @@ class NotificacionService
             'grupo_titulo' => $row->grupo_titulo,
             'accion_estado' => $row->accion_estado,
             'accion_respuesta' => $row->accion_respuesta,
-            'accion_respondida_at' => $row->accion_respondida_at,
-            'accion_disponible_nuevamente_at' => $row->accion_disponible_nuevamente_at,
+            'accion_respondida_at' => $this->formatUtcDateTime($row->accion_respondida_at),
+            'accion_disponible_nuevamente_at' => $this->formatUtcDateTime($row->accion_disponible_nuevamente_at),
             'metadata' => is_string($row->metadata)
                 ? (json_decode($row->metadata, true) ?: [])
                 : ($row->metadata ?? []),
-            'created_at' => $row->created_at,
-            'leido_en' => $row->leido_en,
+            'created_at' => $this->formatUtcDateTime($row->created_at),
+            'leido_en' => $this->formatUtcDateTime($row->leido_en),
             'actor' => $row->id_usuario_actor ? [
                 'id_usuario' => (int) $row->id_usuario_actor,
                 'nombre' => trim(($row->actor_nombre ?? '') . ' ' . ($row->actor_apellido ?? '')),
@@ -757,6 +758,17 @@ class NotificacionService
             self::MODULO_EVENTOS,
             self::MODULO_ADMINISTRACION,
         ], true);
+    }
+
+    private function formatUtcDateTime(mixed $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        return Carbon::parse($value, config('app.timezone'))
+            ->utc()
+            ->format('Y-m-d\TH:i:s\Z');
     }
 
 
