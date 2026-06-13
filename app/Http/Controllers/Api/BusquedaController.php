@@ -211,9 +211,23 @@ class BusquedaController extends Controller
         return response()->json($profesiones);
     }
 
-    /**
-     * Obtener las habilidades blandas únicas usadas en portafolios para filtros y sugerencias
-     */
+    /** Obtener palabras unicas usadas en nombres y apellidos publicos */
+    public function nombresUsuarios(): JsonResponse
+    {
+        return response()->json($this->service->getNombresUsuarios());
+    }
+
+    public function ciudades(): JsonResponse
+    {
+        return response()->json($this->service->getCiudades());
+    }
+
+    public function paises(): JsonResponse
+    {
+        return response()->json($this->service->getPaises());
+    }
+
+    /** Obtener las habilidades blandas unicas para filtros y sugerencias */
     public function habilidadesBlandas(): JsonResponse
     {
         $habilidades = $this->service->getHabilidadesBlandas();

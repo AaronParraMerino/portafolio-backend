@@ -3,6 +3,7 @@
 namespace App\Services\api;
 
 use App\Models\Habilidad;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -1174,6 +1175,62 @@ class BusquedaService
             ->distinct()
             ->orderBy('perfiles.profesion')
             ->pluck('perfiles.profesion');
+    }
+
+    /** Lista palabras unicas usadas en nombres y apellidos publicos */
+    public function getNombresUsuarios()
+    {
+        return Cache::remember('busqueda.catalogos.nombres-usuarios.v1', now()->addMinutes(15), function () {
+            return DB::table('usuarios')
+                ->join('perfiles', 'perfiles.usuario_id', '=', 'usuarios.id_usuario')
+                ->whereIn('usuarios.estado', ['activo', 'pausado'])
+                ->whereRaw('perfiles.es_publico IS TRUE')
+                ->get(['usuarios.nombre', 'usuarios.apellido'])
+                ->flatMap(function ($usuario) {
+                    return preg_split('/\s+/u', trim("{$usuario->nombre} {$usuario->apellido}"), -1, PREG_SPLIT_NO_EMPTY);
+                })
+                ->map(fn ($palabra) => trim((string) $palabra))
+                ->filter()
+                ->unique(fn ($palabra) => Str::lower(Str::ascii($palabra)))
+                ->sortBy(fn ($palabra) => Str::lower(Str::ascii($palabra)))
+                ->values();
+        });
+    }
+
+    /** Lista ciudades visibles usadas en perfiles publicos */
+    public function getCiudades()
+    {
+        return $this->getValoresPerfilVisibles('ciudad');
+    }
+
+    /** Lista paises visibles usados en perfiles publicos */
+    public function getPaises()
+    {
+        return $this->getValoresPerfilVisibles('pais');
+    }
+
+    /** Lista valores unicos y visibles de un campo de perfil */
+    private function getValoresPerfilVisibles(string $campo)
+    {
+        return Cache::remember("busqueda.catalogos.{$campo}.v1", now()->addMinutes(15), function () use ($campo) {
+            return DB::table('perfiles')
+                ->join('usuarios', 'usuarios.id_usuario', '=', 'perfiles.usuario_id')
+                ->join('visibilidad_campos as vis', function ($join) use ($campo) {
+                    $join->on('vis.usuario_id', '=', 'usuarios.id_usuario')
+                        ->where('vis.campo', $campo);
+                })
+                ->whereIn('usuarios.estado', ['activo', 'pausado'])
+                ->whereRaw('perfiles.es_publico IS TRUE')
+                ->whereRaw('vis.visible IS TRUE')
+                ->whereNotNull("perfiles.{$campo}")
+                ->where("perfiles.{$campo}", '<>', '')
+                ->pluck("perfiles.{$campo}")
+                ->map(fn ($valor) => trim(preg_replace('/\s+/u', ' ', (string) $valor)))
+                ->filter()
+                ->unique(fn ($valor) => Str::lower(Str::ascii($valor)))
+                ->sortBy(fn ($valor) => Str::lower(Str::ascii($valor)))
+                ->values();
+        });
     }
 
     /** Lista habilidades blandas */
