@@ -2,9 +2,9 @@ FROM php:8.2-apache
 
 RUN apt-get update && apt-get install -y \
     git unzip zip libzip-dev libpq-dev gettext-base \
-    libjpeg62-turbo-dev libpng-dev libwebp-dev \
+    libjpeg62-turbo-dev libpng-dev libwebp-dev libicu-dev \
     && docker-php-ext-configure gd --with-jpeg --with-webp \
-    && docker-php-ext-install pdo pdo_pgsql pdo_mysql zip gd \
+    && docker-php-ext-install pdo pdo_pgsql pdo_mysql zip gd intl opcache \
     && a2enmod rewrite headers
 
 COPY --from=composer:2.9.5 /usr/bin/composer /usr/bin/composer
