@@ -239,7 +239,7 @@ class ProyectoSerializer
                     ->where('urv.id_usuario', '=', $userId);
             })
             ->whereIn('pr.id_proyecto', $ids)
-            ->where('pr.proveedor', 'github')
+            ->whereIn('pr.proveedor', ['github', 'gitlab'])
             ->whereNull('pr.deleted_at')
             ->whereRaw('urv.validado = TRUE')
             ->select('pr.id_proyecto', 'urv.relacion_github', 'urv.es_propietario', 'urv.permisos_github')

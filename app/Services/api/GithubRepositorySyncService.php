@@ -7,6 +7,7 @@ use App\Models\ParticipacionRepositorio;
 use App\Models\ProyectoRepositorio;
 use App\Models\RepositorioGithub;
 use App\Models\UsuarioRepositorioValidacion;
+use App\Services\api\Proyecto\ProyectoProveedorDesvinculacionService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -14,6 +15,10 @@ use Illuminate\Support\Facades\Http;
 class GithubRepositorySyncService
 {
     private const MAX_DETAILED_REPOS_PER_SYNC = 15;
+
+    public function __construct(
+        private readonly ProyectoProveedorDesvinculacionService $proyectoProveedorDesvinculacionService,
+    ) {}
 
     public function findExistingProjectForJoinableRepoUrls(int $usuarioId, array $repoUrls): array
     {
@@ -235,7 +240,12 @@ class GithubRepositorySyncService
         return 'github_repo_languages:' . $usuarioId . ':' . sha1(strtolower($repo['owner'] . '/' . $repo['name']));
     }
 
-    public function syncProjectRepoUrlsForUsuario(int $usuarioId, int $idProyecto, array $repoUrls): array
+    public function syncProjectRepoUrlsForUsuario(
+        int $usuarioId,
+        int $idProyecto,
+        array $repoUrls,
+        bool $desvincularAusentes = true,
+    ): array
     {
         $urls = collect($repoUrls)
             ->filter(fn ($url) => is_string($url) && trim($url) !== '')
@@ -272,11 +282,13 @@ class GithubRepositorySyncService
             ];
         }
 
-        $reposParaDesvincular = ProyectoRepositorio::query()
-            ->where('id_proyecto', $idProyecto)
-            ->where('proveedor', 'github')
-            ->when($urls->isNotEmpty(), fn ($query) => $query->whereNotIn('url_repositorio', $urls->all()))
-            ->get();
+        $reposParaDesvincular = $desvincularAusentes
+            ? ProyectoRepositorio::query()
+                ->where('id_proyecto', $idProyecto)
+                ->where('proveedor', 'github')
+                ->when($urls->isNotEmpty(), fn ($query) => $query->whereNotIn('url_repositorio', $urls->all()))
+                ->get()
+            : collect();
 
         if ($reposParaDesvincular->isNotEmpty()) {
             $repoIds = $reposParaDesvincular
@@ -844,7 +856,10 @@ class GithubRepositorySyncService
             return $reposResponse;
         }
 
-        $repos = $reposResponse['repos'];
+        $repos = collect($reposResponse['repos'])
+            ->unique(fn ($repo) => (string) ($repo['id'] ?? $repo['html_url'] ?? ''))
+            ->values()
+            ->all();
         $created = 0;
         $updated = 0;
         $detailsUpdated = 0;
@@ -954,6 +969,17 @@ class GithubRepositorySyncService
         $cuentaGithub->token_updated_at = now();
         $cuentaGithub->save();
 
+        $remoteRepoIds = collect($repos)->pluck('id')->filter()->unique()->values()->all();
+        $positiveValidation = $this->proyectoProveedorDesvinculacionService
+            ->reconciliarRepositoriosPresentesConfirmados($usuarioId, 'github', $remoteRepoIds);
+
+        $accessLoss = $this->proyectoProveedorDesvinculacionService
+            ->invalidarRepositoriosAusentesConfirmados(
+                $usuarioId,
+                'github',
+                $remoteRepoIds,
+            );
+
         return [
             'status' => 'success',
             'message' => 'Repositorios sincronizados correctamente.',
@@ -963,6 +989,9 @@ class GithubRepositorySyncService
                 'actualizados' => $updated,
                 'detalles_actualizados' => $detailsUpdated,
                 'detalles_omitidos_por_limite' => $detailsSkipped,
+                'validaciones_revocadas' => $accessLoss['validaciones_invalidadas'] ?? 0,
+                'participaciones_desvinculadas' => count($accessLoss['usuarios_desvinculados'] ?? []),
+                'participaciones_validadas' => $positiveValidation['participaciones_validadas'] ?? 0,
             ],
         ];
     }

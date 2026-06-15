@@ -113,17 +113,14 @@ class ProyectoPermisoService
         $isGithubAuthority = (bool) ($authority['tiene_autoridad'] ?? false);
         $isValidated = (bool) ($participacion->participacion_validada ?? false)
             || $this->hasValidatedGithubParticipation($userId, $idProyecto);
-        $githubOverridesCreator = (bool) ($config['github_prevalece_sobre_creador'] ?? true);
         $adminPolicy = $config['puede_administrar_proyecto'] ?? 'propietarios';
-        $githubCanManage = $isGithubAuthority
-            && ($githubOverridesCreator || $adminPolicy === 'autoridad_github');
-        $canAdmin = $isOwner || $githubCanManage;
+        $canAdmin = $isOwner || ($adminPolicy === 'autoridad_github' && $isGithubAuthority);
 
         $canEdit = match ($config['puede_editar_proyecto'] ?? 'participantes_validados') {
-            'propietarios' => $isOwner || ($githubOverridesCreator && $isGithubAuthority),
+            'propietarios' => $isOwner,
             'autoridad_github' => $isOwner || $isGithubAuthority,
             'participantes' => true,
-            default => $isOwner || ($githubOverridesCreator && $isGithubAuthority) || $isValidated,
+            default => $isOwner || $isValidated,
         };
 
         return [
@@ -154,17 +151,14 @@ class ProyectoPermisoService
         $isGithubAuthority = (bool) ($authority['tiene_autoridad'] ?? false);
         $isValidated = $this->truthy($participacion['participacion_validada'] ?? false)
             || $validaciones->isNotEmpty();
-        $githubOverridesCreator = (bool) ($config['github_prevalece_sobre_creador'] ?? true);
         $adminPolicy = $config['puede_administrar_proyecto'] ?? 'propietarios';
-        $githubCanManage = $isGithubAuthority
-            && ($githubOverridesCreator || $adminPolicy === 'autoridad_github');
-        $canAdmin = $isOwner || $githubCanManage;
+        $canAdmin = $isOwner || ($adminPolicy === 'autoridad_github' && $isGithubAuthority);
 
         $canEdit = match ($config['puede_editar_proyecto'] ?? 'participantes_validados') {
-            'propietarios' => $isOwner || ($githubOverridesCreator && $isGithubAuthority),
+            'propietarios' => $isOwner,
             'autoridad_github' => $isOwner || $isGithubAuthority,
             'participantes' => true,
-            default => $isOwner || ($githubOverridesCreator && $isGithubAuthority) || $isValidated,
+            default => $isOwner || $isValidated,
         };
 
         return [
@@ -205,7 +199,7 @@ class ProyectoPermisoService
 
     public function hasValidatedGithubParticipation(int $userId, int $idProyecto): bool
     {
-        $repoIds = $this->projectGithubRepositoryIds($idProyecto);
+        $repoIds = $this->projectRepositoryIds($idProyecto);
 
         if ($repoIds === []) {
             return false;
@@ -230,7 +224,7 @@ class ProyectoPermisoService
 
     private function getGithubAuthorityForProject(int $userId, int $idProyecto, array $config): array
     {
-        $repoIds = $this->projectGithubRepositoryIds($idProyecto);
+        $repoIds = $this->projectRepositoryIds($idProyecto);
 
         if ($repoIds === []) {
             return ['tiene_autoridad' => false, 'nivel' => null, 'relacion' => null];
@@ -274,12 +268,12 @@ class ProyectoPermisoService
         return ['tiene_autoridad' => false, 'nivel' => null, 'relacion' => null];
     }
 
-    private function projectGithubRepositoryIds(int $idProyecto): array
+    private function projectRepositoryIds(int $idProyecto): array
     {
         return DB::table('proyecto_repositorios as pr')
             ->join('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
             ->where('pr.id_proyecto', $idProyecto)
-            ->where('pr.proveedor', 'github')
+            ->whereIn('pr.proveedor', ['github', 'gitlab'])
             ->whereNull('pr.deleted_at')
             ->pluck('rg.id_repositorio_github')
             ->filter()

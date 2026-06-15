@@ -19,6 +19,19 @@ class ProyectoConsultaController extends Controller
         }
 
         $lang = $request->query('lang', 'es');
+        $page = $request->integer('page');
+        $perPage = $request->integer('per_page');
+
+        if ($page > 0 || $perPage > 0) {
+            $result = $this->proyectoConsultaService->listByUserPaginated(
+                $userId,
+                max($page, 1),
+                min(max($perPage, 1), 50),
+                $lang
+            );
+
+            return response()->json($result);
+        }
 
         return response()->json([
             'data' => $this->proyectoConsultaService->listByUser($userId, $lang)

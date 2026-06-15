@@ -22,6 +22,7 @@ class ProyectoEnlaceService
         private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
         private readonly ProyectoConsultaService $proyectoConsultaService,
         private readonly ProyectoSerializer $proyectoSerializer,
+        private readonly ProyectoParticipacionValidacionService $proyectoParticipacionValidacionService,
     ) {}
 
     public static function validationRules(): array
@@ -124,24 +125,70 @@ class ProyectoEnlaceService
             ->whereNull('deleted_at')
             ->update(['deleted_at' => now(), 'updated_at' => now()]);
 
-        $githubUrls = collect($payload['url_repositorios'] ?? [])
-            ->filter(fn ($url) => is_string($url) && str_contains(strtolower($url), 'github.com/'))
+        $repositoryUrls = collect($payload['url_repositorios'] ?? [])
+            ->filter(fn ($url) => is_string($url) && trim($url) !== '')
+            ->map(fn ($url) => trim($url))
+            ->unique(fn ($url) => $this->normalizeRepositoryUrl($url))
+            ->values();
+
+        $githubUrls = $repositoryUrls
+            ->filter(fn ($url) => str_contains(strtolower($url), 'github.com/'))
             ->values()
             ->all();
-
-        if ($githubUrls === []) {
-            return;
-        }
 
         $result = $this->githubRepositorySyncService->syncProjectRepoUrlsForUsuario(
             $userId,
             $idProyecto,
             $githubUrls,
+            false,
         );
 
         if (($result['status'] ?? 'error') !== 'success') {
             abort($result['http_status'] ?? 422, $result['message'] ?? 'No se pudieron validar los repositorios.');
         }
+
+        DB::transaction(function () use ($idProyecto, $repositoryUrls) {
+            $this->detachMissingProjectRepositories($idProyecto, $repositoryUrls->all());
+            $this->proyectoParticipacionValidacionService->reconciliarProyecto($idProyecto);
+        });
+    }
+
+    private function detachMissingProjectRepositories(int $idProyecto, array $repositoryUrls): void
+    {
+        $desiredUrls = collect($repositoryUrls)
+            ->map(fn ($url) => $this->normalizeRepositoryUrl((string) $url))
+            ->filter()
+            ->flip();
+
+        $repositoryIds = DB::table('proyecto_repositorios')
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->get(['id_proyecto_repositorio', 'url_repositorio'])
+            ->filter(fn ($repo) => ! $desiredUrls->has(
+                $this->normalizeRepositoryUrl((string) ($repo->url_repositorio ?? ''))
+            ))
+            ->pluck('id_proyecto_repositorio')
+            ->all();
+
+        if ($repositoryIds === []) {
+            return;
+        }
+
+        DB::table('participacion_repositorios')
+            ->whereIn('id_proyecto_repositorio', $repositoryIds)
+            ->delete();
+
+        DB::table('proyecto_repositorios')
+            ->whereIn('id_proyecto_repositorio', $repositoryIds)
+            ->update([
+                'id_proyecto' => null,
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function normalizeRepositoryUrl(string $url): string
+    {
+        return strtolower(rtrim(trim($url), '/'));
     }
 
     private function syncProjectTechnologies(int $userId, int $idProyecto, array $payload): void

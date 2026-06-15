@@ -8,6 +8,7 @@ use App\Models\ProyectoRepositorio;
 use App\Models\RepositorioGithub;
 use App\Models\UsuarioRepositorioValidacion;
 use App\Services\api\Auth\GitlabOAuthService;
+use App\Services\api\Proyecto\ProyectoProveedorDesvinculacionService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
@@ -16,9 +17,10 @@ class GitlabRepositorySyncService
     private const MAX_DETAILED_REPOS_PER_SYNC = 0;
     private const MAX_PROJECT_PAGES_PER_SYNC = 3;
 
-    public function __construct(private readonly GitlabOAuthService $gitlabOAuthService)
-    {
-    }
+    public function __construct(
+        private readonly GitlabOAuthService $gitlabOAuthService,
+        private readonly ProyectoProveedorDesvinculacionService $proyectoProveedorDesvinculacionService,
+    ) {}
 
     public function syncForUsuario(int $usuarioId): array
     {
@@ -55,7 +57,10 @@ class GitlabRepositorySyncService
             return $projectsResponse;
         }
 
-        $projects = $projectsResponse['repos'];
+        $projects = collect($projectsResponse['repos'])
+            ->unique(fn ($project) => (string) ($project['id'] ?? $project['web_url'] ?? ''))
+            ->values()
+            ->all();
         $created = 0;
         $updated = 0;
         $detailsUpdated = 0;
@@ -163,6 +168,21 @@ class GitlabRepositorySyncService
         $cuentaGitlab->token_updated_at = now();
         $cuentaGitlab->save();
 
+        $remoteRepoIds = collect($projects)->pluck('id')->filter()->unique()->values()->all();
+        $positiveValidation = $this->proyectoProveedorDesvinculacionService
+            ->reconciliarRepositoriosPresentesConfirmados($usuarioId, 'gitlab', $remoteRepoIds);
+
+        $accessLoss = ($projectsResponse['complete'] ?? false)
+            ? $this->proyectoProveedorDesvinculacionService->invalidarRepositoriosAusentesConfirmados(
+                $usuarioId,
+                'gitlab',
+                $remoteRepoIds,
+            )
+            : [
+                'validaciones_invalidadas' => 0,
+                'usuarios_desvinculados' => [],
+            ];
+
         return [
             'status' => 'success',
             'message' => 'Repositorios GitLab sincronizados correctamente.',
@@ -172,6 +192,10 @@ class GitlabRepositorySyncService
                 'actualizados' => $updated,
                 'detalles_actualizados' => $detailsUpdated,
                 'detalles_omitidos_por_limite' => $detailsSkipped,
+                'lista_remota_completa' => (bool) ($projectsResponse['complete'] ?? false),
+                'validaciones_revocadas' => $accessLoss['validaciones_invalidadas'] ?? 0,
+                'participaciones_desvinculadas' => count($accessLoss['usuarios_desvinculados'] ?? []),
+                'participaciones_validadas' => $positiveValidation['participaciones_validadas'] ?? 0,
             ],
         ];
     }
@@ -576,6 +600,7 @@ class GitlabRepositorySyncService
         return [
             'status' => 'success',
             'repos' => $projects,
+            'complete' => count($chunk) < 100,
         ];
     }
 

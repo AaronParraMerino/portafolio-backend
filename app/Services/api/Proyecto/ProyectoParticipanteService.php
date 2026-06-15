@@ -24,7 +24,7 @@ class ProyectoParticipanteService
         $repoGithubIds = DB::table('proyecto_repositorios as pr')
             ->leftJoin('repositorio_github as rg', 'rg.id_proyecto_repositorio', '=', 'pr.id_proyecto_repositorio')
             ->where('pr.id_proyecto', $idProyecto)
-            ->where('pr.proveedor', 'github')
+            ->whereIn('pr.proveedor', ['github', 'gitlab'])
             ->whereNull('pr.deleted_at')
             ->pluck('rg.id_repositorio_github')
             ->filter()
@@ -69,9 +69,13 @@ class ProyectoParticipanteService
         $participants = [];
         foreach ($systemRows as $row) {
             $userValidaciones = $validaciones->get($row->id_usuario, collect());
-            $validacion = $userValidaciones->first(fn ($item) => (bool) $item->validado)
+            $validacion = $userValidaciones->first(
+                fn ($item) => $this->proyectoPermisoService->truthy($item->validado ?? false)
+            )
                 ?? $userValidaciones->first();
-            $validado = (bool) ($validacion?->validado ?? $row->participacion_validada ?? false);
+            $validado = $this->proyectoPermisoService->truthy(
+                $validacion?->validado ?? $row->participacion_validada ?? false
+            );
             $tipo = $validado ? 'usuario_github_validado' : 'usuario_sin_validacion_github';
 
             if (! $validado && $hideUnvalidated && ! $canManageUnvalidated) {
@@ -86,7 +90,7 @@ class ProyectoParticipanteService
                 'email' => $row->correo,
                 'rol' => $row->rol,
                 'descripcion_aporte' => $row->descripcion_aporte,
-                'es_propietario' => (bool) $row->es_propietario,
+                'es_propietario' => $this->proyectoPermisoService->truthy($row->es_propietario ?? false),
                 'foto_perfil' => $row->foto_perfil,
                 'avatar_thumb_url' => $this->profileImageVariants->getVariantUrl($row->foto_perfil, 'thumb'),
                 'github_avatar_url' => $row->github_foto_url,
@@ -102,7 +106,9 @@ class ProyectoParticipanteService
                 'validacion' => [
                     'validado' => $validado,
                     'relacion_github' => $validacion->relacion_github ?? 'unknown',
-                    'es_propietario' => (bool) ($validacion->es_propietario ?? false),
+                    'es_propietario' => $this->proyectoPermisoService->truthy(
+                        $validacion->es_propietario ?? false
+                    ),
                     'ultima_verificacion_at' => $validacion->ultima_verificacion_at ?? null,
                 ],
             ];
@@ -188,7 +194,7 @@ class ProyectoParticipanteService
             return ['status' => 'owner'];
         }
 
-        $isValidated = (bool) ($participacion->participacion_validada ?? false)
+        $isValidated = $this->proyectoPermisoService->truthy($participacion->participacion_validada ?? false)
             || $this->proyectoPermisoService->hasValidatedGithubParticipation(
                 (int) $participacion->id_usuario,
                 $idProyecto

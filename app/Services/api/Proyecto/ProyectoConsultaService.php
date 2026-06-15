@@ -10,7 +10,31 @@ class ProyectoConsultaService
 
     public function listByUser(int $userId, string $lang = 'es'): array
     {
-        $projects = DB::table('participaciones as p')
+        $projects = $this->projectsByUserQuery($userId)->get();
+
+        return $this->serializeProjects($projects, $userId, $lang);
+    }
+
+    public function listByUserPaginated(int $userId, int $page, int $perPage, string $lang = 'es'): array
+    {
+        $paginator = $this->projectsByUserQuery($userId)
+            ->paginate($perPage, ['*'], 'page', $page);
+
+        return [
+            'data' => $this->serializeProjects(collect($paginator->items()), $userId, $lang),
+            'meta' => [
+                'pagina_actual' => $paginator->currentPage(),
+                'ultima_pagina' => $paginator->lastPage(),
+                'por_pagina' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'hay_mas' => $paginator->hasMorePages(),
+            ],
+        ];
+    }
+
+    private function projectsByUserQuery(int $userId)
+    {
+        return DB::table('participaciones as p')
             ->join('proyectos as pr', 'pr.id_proyecto', '=', 'p.id_proyecto')
             ->where('p.id_usuario', $userId)
             ->whereNull('p.deleted_at')
@@ -27,9 +51,11 @@ class ProyectoConsultaService
                 'p.visibilidad',
                 'p.fecha_inicio as part_fecha_inicio',
                 'p.fecha_fin as part_fecha_fin'
-            )
-            ->get();
+            );
+    }
 
+    private function serializeProjects($projects, int $userId, string $lang): array
+    {
         $context = $this->proyectoSerializer->loadIndexContext($projects, $userId);
 
         return $projects

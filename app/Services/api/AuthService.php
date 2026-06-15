@@ -8,6 +8,8 @@ use App\Services\api\Auth\DiscordOAuthService;
 use App\Services\api\Auth\GithubOAuthService;
 use App\Services\api\Auth\GitlabOAuthService;
 use App\Services\api\Auth\GoogleOAuthService;
+use App\Services\api\Proyecto\ProyectoProveedorDesvinculacionService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
@@ -23,6 +25,7 @@ class AuthService
         private readonly GitlabOAuthService $gitlabOAuthService,
         private readonly DiscordOAuthService $discordOAuthService,
         private readonly ?ProfileImageVariantService $profileImageVariants = null,
+        private readonly ?ProyectoProveedorDesvinculacionService $proyectoProveedorDesvinculacionService = null,
     ) {
     }
 
@@ -440,9 +443,23 @@ public function unlinkOAuthAccountFromUser(int $usuarioId, string $provider): ar
         return ['status' => 'last_provider'];
     }
 
-    $link->delete();
+    $providerResult = DB::transaction(function () use ($link, $usuarioId, $provider) {
+        $providerResult = null;
 
-    return ['status' => 'success'];
+        if ($this->proyectoProveedorDesvinculacionService) {
+            $providerResult = $this->proyectoProveedorDesvinculacionService
+                ->desvincularProveedor($usuarioId, $provider);
+        }
+
+        $link->delete();
+
+        return $providerResult;
+    });
+
+    return [
+        'status' => 'success',
+        'provider_result' => $providerResult,
+    ];
 }
 
 private function resolveOAuthIdentityByCode(string $provider, string $code): array

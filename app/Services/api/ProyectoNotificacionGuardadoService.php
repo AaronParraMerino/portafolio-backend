@@ -171,6 +171,29 @@ class ProyectoNotificacionGuardadoService
     }
 
     /**
+     * Notifica una desvinculacion automatica por perdida confirmada de acceso.
+     */
+    public function notificarDesvinculacionAutomaticaPorPerdidaValidacion(
+        int $idProyecto,
+        int $idUsuarioDestino
+    ): array {
+        $proyecto = $this->obtenerProyecto($idProyecto);
+
+        if (!$proyecto) {
+            return $this->sinAccion('Proyecto no encontrado');
+        }
+
+        return $this->crearParaUsuarios(collect([$idUsuarioDestino]), [
+            'id_usuario_actor' => null,
+            'tipo' => 'project_participation_access_revoked',
+            'mensaje' => 'Tu participacion en el proyecto "' . $proyecto->titulo
+                . '" fue desvinculada porque el proveedor confirmo que perdiste acceso al ultimo repositorio validado.',
+            'contexto_referencia' => 'proyecto_' . $idProyecto,
+            'grupo_titulo' => $proyecto->titulo,
+        ]);
+    }
+
+    /**
      * Notifica a participantes cuando otro usuario actualizó un proyecto compartido
      */
     public function notificarProyectoActualizado(
