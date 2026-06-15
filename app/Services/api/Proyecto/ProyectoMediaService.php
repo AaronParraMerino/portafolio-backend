@@ -6,6 +6,7 @@ use App\Services\api\ProfileImageVariantService;
 use App\Services\api\ProyectoNotificacionGuardadoService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -303,34 +304,43 @@ class ProyectoMediaService
         $extension = $file->getClientOriginalExtension() ?: $file->extension() ?: 'bin';
         $path = trim($folder, '/').'/'.Str::uuid().'.'.$extension;
         $content = file_get_contents($file->getRealPath());
+        $mimeType = $file->getMimeType() ?: 'application/octet-stream';
+        $objectUrl = rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.$path;
 
-        $ch = curl_init();
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer '.$key,
+                    'apikey' => $key,
+                    'Content-Type' => $mimeType,
+                ])
+                ->withBody($content, $mimeType)
+                ->post($objectUrl);
+        } catch (\Throwable $exception) {
+            Log::error('No se pudo subir archivo de proyecto a Supabase Storage.', [
+                'folder' => $folder,
+                'path' => $path,
+                'error' => $exception->getMessage(),
+            ]);
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.$path,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => $content,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer '.$key,
-                'apikey: '.$key,
-                'Content-Type: '.($file->getMimeType() ?: 'application/octet-stream'),
-            ],
-        ]);
+            abort(502, 'Error al subir archivo a Supabase Storage.');
+        }
 
-        $response = curl_exec($ch);
-        $error = curl_error($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        if ($response->failed()) {
+            Log::error('Supabase rechazo la subida de archivo de proyecto.', [
+                'folder' => $folder,
+                'path' => $path,
+                'status' => $response->status(),
+                'response' => $response->body(),
+            ]);
 
-        if ($error || $status >= 400) {
             abort(502, 'Error al subir archivo a Supabase Storage.');
         }
 
         return [
             'path' => $path,
             'url' => rtrim($urlBase, '/').'/storage/v1/object/public/'.$bucket.'/'.$path,
-            'response' => $response,
+            'response' => $response->body(),
         ];
     }
 
@@ -373,27 +383,42 @@ class ProyectoMediaService
             return;
         }
 
-        $ch = curl_init();
+        $storagePath = ltrim($storagePath, '/');
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.ltrim($storagePath, '/'),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'DELETE',
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer '.$key,
-                'apikey: '.$key,
-            ],
-        ]);
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer '.$key,
+                    'apikey' => $key,
+                ])
+                ->delete(rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.$storagePath);
+        } catch (\Throwable $exception) {
+            Log::warning('No se pudo eliminar archivo original de proyecto en Supabase Storage.', [
+                'path' => $storagePath,
+                'error' => $exception->getMessage(),
+            ]);
 
-        $response = curl_exec($ch);
-        $error = curl_error($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+            throw new RuntimeException('No se pudo eliminar el archivo original de Supabase Storage.');
+        }
 
-        $payload = is_string($response) ? json_decode($response, true) : null;
-        $notFound = $status === 404 || (int) ($payload['statusCode'] ?? 0) === 404;
+        if ($response->status() === 404) {
+            return;
+        }
 
-        if ($error || (! $notFound && ($status < 200 || $status >= 300))) {
+        if ($response->failed()) {
+            $payload = json_decode($response->body(), true);
+            $notFound = (int) ($payload['statusCode'] ?? 0) === 404;
+
+            if ($notFound) {
+                return;
+            }
+
+            Log::warning('Supabase rechazo la eliminacion de archivo original de proyecto.', [
+                'path' => $storagePath,
+                'status' => $response->status(),
+                'response' => $response->body(),
+            ]);
+
             throw new RuntimeException('No se pudo eliminar el archivo original de Supabase Storage.');
         }
     }

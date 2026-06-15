@@ -71,6 +71,11 @@ portafolio-backend/public/
 Usar `.env.production.example` como base para el `.env` del servidor. Completar
 `APP_KEY`, base de datos, correo y secretos OAuth.
 
+Mantener `CACHE_STORE=file`. La vinculacion OAuth guarda temporalmente el
+parametro `state` en cache antes de redirigir al proveedor. Con
+`CACHE_STORE=database`, el servidor tambien necesita una tabla `cache`; si no
+existe, todos los endpoints `/api/auth/*/connect-url` responden `500`.
+
 En el servidor, la estructura debe mantener `public_html` al mismo nivel que
 `app`, `bootstrap`, `storage` y `vendor`. Copiar el contenido de `public/`
 dentro de `public_html/`.
@@ -88,6 +93,8 @@ php artisan optimize:clear
 php artisan config:cache
 php artisan route:cache
 ```
+
+Laravel debe poder escribir en `storage/framework/cache/data`.
 
 Verificar:
 

@@ -6,6 +6,7 @@ use App\Services\api\ProfileImageVariantService;
 use App\Services\api\ProyectoNotificacionGuardadoService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class ProyectoCicloVidaService
@@ -293,17 +294,28 @@ class ProyectoCicloVidaService
             return;
         }
 
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL => rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.ltrim($path, '/'),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'DELETE',
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer '.$key,
-                'apikey: '.$key,
-            ],
-        ]);
-        curl_exec($ch);
-        curl_close($ch);
+        $normalizedPath = ltrim($path, '/');
+
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer '.$key,
+                    'apikey' => $key,
+                ])
+                ->delete(rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.$normalizedPath);
+
+            if ($response->failed() && $response->status() !== 404) {
+                Log::warning('No se pudo eliminar un archivo de Supabase al borrar definitivamente un proyecto.', [
+                    'path' => $normalizedPath,
+                    'status' => $response->status(),
+                    'response' => $response->body(),
+                ]);
+            }
+        } catch (\Throwable $exception) {
+            Log::warning('No se pudo eliminar un archivo de Supabase al borrar definitivamente un proyecto.', [
+                'path' => $normalizedPath,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 }
