@@ -17,7 +17,9 @@ use Illuminate\Support\Str;
 class AdminEventoService
 {
     public const PAGE_SIZE = 9;
-    public const MONTHLY_EVENT_LIMIT = 3;
+    public const ACTIVE_EVENT_LIMIT = 3;
+
+    private const PUBLISHED_STATUSES = ['activo', 'programado'];
 
     public function __construct(
         private readonly AdminNotificacionGuardadoService $adminNotificacionGuardadoService,
@@ -228,11 +230,12 @@ class AdminEventoService
             throw new \RuntimeException('Solo usuarios con rol publicante pueden crear eventos.');
         }
 
-        $startsAt = $this->parseEventStart($data);
-        $this->ensureMonthlyLimit($usuario, $startsAt);
-
         return DB::transaction(function () use ($usuario, $data, $image): AdminEvento {
             $payload = $this->eventPayload($data, $usuario->id_usuario, true);
+            $this->ensureActiveEventLimit(
+                (int) $usuario->id_usuario,
+                (string) ($payload['estado'] ?? 'borrador')
+            );
             $event = AdminEvento::create($payload);
 
             if ($image) {
@@ -267,9 +270,6 @@ class AdminEventoService
             throw new \RuntimeException('No puedes modificar un evento eliminado.');
         }
 
-        $startsAt = $this->parseEventStart($data, $event->fecha_inicio);
-        $this->ensureMonthlyLimit($usuario, $startsAt, $event->id_evento);
-
         return DB::transaction(function () use ($usuario, $event, $data, $image): AdminEvento {
 
             //seccion para notificar a usuarios inscritos
@@ -285,7 +285,13 @@ class AdminEventoService
             ];
             //fin de seccion de notificar
 
-            $event->update($this->eventPayload($data, $usuario->id_usuario, false));
+            $payload = $this->eventPayload($data, $usuario->id_usuario, false);
+            $this->ensureActiveEventLimit(
+                (int) $usuario->id_usuario,
+                (string) ($payload['estado'] ?? $event->estado),
+                (int) $event->id_evento
+            );
+            $event->update($payload);
 
             if ($image) {
                 $this->storeCoverImage($event, $image);
@@ -333,6 +339,12 @@ class AdminEventoService
 
         return DB::transaction(function () use ($event, $admin, $action, $reason, $nextStatus): AdminEvento {
             $previousStatus = $event->estado;
+
+            $this->ensureActiveEventLimit(
+                (int) $event->usuario_creador_id,
+                $nextStatus,
+                (int) $event->id_evento
+            );
 
             $event->update([
                 'estado' => $nextStatus,
@@ -665,27 +677,35 @@ class AdminEventoService
         return $result;
     }
 
-    private function parseEventStart(array $data, $fallback = null): Carbon
+    private function ensureActiveEventLimit(
+        int $publisherId,
+        string $nextStatus,
+        ?int $exceptEventId = null
+    ): void
     {
-        $value = $data['fecha_inicio'] ?? $data['startsAt'] ?? $fallback ?? now();
+        if (! in_array($nextStatus, self::PUBLISHED_STATUSES, true)) {
+            return;
+        }
 
-        return Carbon::parse($value);
-    }
+        $publisher = Usuario::query()
+            ->whereKey($publisherId)
+            ->lockForUpdate()
+            ->first();
 
-    private function ensureMonthlyLimit(Usuario $usuario, Carbon $startsAt, ?int $exceptEventId = null): void
-    {
+        if (! $publisher || $publisher->rol !== 'publicante') {
+            return;
+        }
+
         $count = AdminEvento::query()
-            ->where('usuario_creador_id', $usuario->id_usuario)
-            ->where('estado', '!=', 'eliminado')
-            ->whereBetween('fecha_inicio', [
-                $startsAt->copy()->startOfMonth(),
-                $startsAt->copy()->endOfMonth(),
-            ])
+            ->where('usuario_creador_id', $publisherId)
+            ->whereIn('estado', self::PUBLISHED_STATUSES)
             ->when($exceptEventId, fn ($query) => $query->where('id_evento', '!=', $exceptEventId))
             ->count();
 
-        if ($count >= self::MONTHLY_EVENT_LIMIT) {
-            throw new \RuntimeException('Ya alcanzaste el limite de 3 eventos para este mes.');
+        if ($count >= self::ACTIVE_EVENT_LIMIT) {
+            throw new \RuntimeException(
+                'Ya tienes 3 eventos activos o programados. Guarda este evento como borrador o libera un cupo antes de publicarlo.'
+            );
         }
     }
 
