@@ -29,6 +29,11 @@ class HabilidadController extends Controller
 
         $habilidades = $this->habilidadService->getCatalog($tipo);
 
+        $lang = $request->query('lang', 'es');
+        $habilidades = collect($habilidades)
+            ->map(fn ($habilidad) => $this->traducirHabilidad($habilidad, $lang))
+            ->values();
+
         return response()->json($habilidades);
     }
 
@@ -48,7 +53,10 @@ class HabilidadController extends Controller
         }
 
         try {
-            $habilidad = $this->habilidadService->createCatalog($validator->validated());
+            $habilidad = $this->habilidadService->createCatalog(
+                $validator->validated(),
+                (int) ($request->user()->id_usuario ?? 0) ?: null
+            );
 
             return response()->json([
                 'message' => 'Habilidad creada correctamente',
@@ -72,7 +80,7 @@ class HabilidadController extends Controller
         return response()->json($habilidades);
     }
 
-    public function showUserSkill(int $userId, int $id): JsonResponse
+    public function showUserSkill(Request $request, int $userId, int $id): JsonResponse
     {
         $habilidad = $this->habilidadService->findOwnedById($userId, $id);
 
@@ -82,7 +90,9 @@ class HabilidadController extends Controller
             ], 404);
         }
 
-        return response()->json($habilidad);
+        return response()->json(
+            $this->traducirHabilidad($habilidad, $request->query('lang', 'es'))
+        );
     }
 
     public function storeUserSkill(Request $request, int $userId): JsonResponse

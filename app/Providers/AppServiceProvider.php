@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Services\api\Translation\Contracts\TranslationProvider;
+use App\Services\api\Translation\Providers\FakeTranslationProvider;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -11,7 +13,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(TranslationProvider::class, function ($app) {
+            return match (config('content_translation.provider', 'fake')) {
+                'fake' => $app->make(FakeTranslationProvider::class),
+                default => $app->make(FakeTranslationProvider::class),
+            };
+        });
     }
 
     /**

@@ -18,6 +18,7 @@ class GithubRepositorySyncService
 
     public function __construct(
         private readonly ProyectoProveedorDesvinculacionService $proyectoProveedorDesvinculacionService,
+        private readonly ContenidoAutoTraduccionService $autoTraduccionService,
     ) {}
 
     public function findExistingProjectForJoinableRepoUrls(int $usuarioId, array $repoUrls): array
@@ -674,6 +675,8 @@ class GithubRepositorySyncService
                 ]);
         });
 
+        $this->traducirParticipacion($usuarioId, (int) $participacion->id_participacion);
+
         return [
             'status' => 'success',
             'message' => 'Repositorios vinculados al proyecto correctamente.',
@@ -730,11 +733,36 @@ class GithubRepositorySyncService
             $participacion = DB::table('participaciones')->where('id_participacion', $idParticipacion)->first();
         }
 
-        return DB::table('participaciones')
+        $participacion = DB::table('participaciones')
             ->where('id_usuario', $usuarioId)
             ->where('id_proyecto', $idProyecto)
             ->whereNull('deleted_at')
             ->first();
+
+        if ($participacion) {
+            $this->traducirParticipacion($usuarioId, (int) $participacion->id_participacion);
+        }
+
+        return $participacion;
+    }
+
+    private function traducirParticipacion(int $usuarioId, int $participacionId): void
+    {
+        $participacion = DB::table('participaciones')
+            ->where('id_participacion', $participacionId)
+            ->first(['rol', 'descripcion_aporte']);
+
+        if ($participacion) {
+            $this->autoTraduccionService->traducirEntidad(
+                'participacion',
+                $participacionId,
+                $usuarioId,
+                [
+                    'rol' => $participacion->rol,
+                    'descripcion_aporte' => $participacion->descripcion_aporte,
+                ]
+            );
+        }
     }
 
     private function syncParticipacionRepositorios(int $usuarioId, object $participacion, $repos): void
