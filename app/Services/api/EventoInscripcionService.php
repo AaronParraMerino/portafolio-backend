@@ -26,6 +26,7 @@ class EventoInscripcionService
             ->orderBy('e.fecha_inicio')
             ->orderByDesc('e.created_at')
             ->get()
+            ->filter(fn ($evento) => $this->eventoTieneOcurrenciasVisibles($evento))
             ->filter(fn ($evento) => $this->usuarioPuedeVerEvento($usuarioId, $evento))
             ->map(fn ($evento) => $this->formatearEvento($evento))
             ->values();
@@ -59,6 +60,7 @@ class EventoInscripcionService
             ->orderBy('e.fecha_inicio')
             ->orderByDesc('e.created_at')
             ->get()
+            ->filter(fn ($evento) => $this->eventoTieneOcurrenciasVisibles($evento))
             ->map(fn ($evento) => $this->formatearEventoPublico($evento))
             ->values();
 
@@ -203,6 +205,7 @@ class EventoInscripcionService
             'e.estado',
             'e.fecha_inicio',
             'e.fecha_fin',
+            'e.dias_activos',
             'e.programado_para',
             'e.ubicacion',
             'e.cupo',
@@ -251,7 +254,56 @@ class EventoInscripcionService
             return false;
         }
 
-        return !$evento->fecha_fin || Carbon::parse($evento->fecha_fin)->gte(now());
+        return $this->eventoTieneOcurrenciasVisibles($evento);
+    }
+
+    private function eventoTieneOcurrenciasVisibles(object $evento): bool
+    {
+        $fechaInicio = $evento->fecha_inicio ? Carbon::parse($evento->fecha_inicio) : null;
+        $fechaFin = $evento->fecha_fin ? Carbon::parse($evento->fecha_fin) : null;
+
+        if (! $fechaFin) {
+            return true;
+        }
+
+        $diasActivos = $this->diasActivos($evento);
+
+        if (empty($diasActivos)) {
+            return $fechaFin->gte(now());
+        }
+
+        if (! $fechaInicio) {
+            return $fechaFin->gte(now());
+        }
+
+        $now = now();
+        $fechaCursor = $fechaInicio->copy()->startOfDay()->max($now->copy()->startOfDay());
+        $fechaLimite = $fechaFin->copy()->startOfDay();
+        $horaInicio = $fechaInicio->format('H:i:s');
+        $horaFin = $fechaFin->format('H:i:s');
+        $iteraciones = 0;
+
+        while ($fechaCursor->lte($fechaLimite) && $iteraciones < 370) {
+            $dia = $this->nombreDia($fechaCursor);
+
+            if (in_array($dia, $diasActivos, true)) {
+                $inicioOcurrencia = Carbon::parse($fechaCursor->toDateString() . ' ' . $horaInicio);
+                $finOcurrencia = Carbon::parse($fechaCursor->toDateString() . ' ' . $horaFin);
+
+                if ($finOcurrencia->lte($inicioOcurrencia)) {
+                    $finOcurrencia->addDay();
+                }
+
+                if ($finOcurrencia->gt($now)) {
+                    return true;
+                }
+            }
+
+            $fechaCursor->addDay();
+            $iteraciones++;
+        }
+
+        return false;
     }
 
     private function usuarioPuedeVerEvento(int $usuarioId, object $evento): bool
@@ -409,6 +461,7 @@ class EventoInscripcionService
             'estado' => $evento->estado,
             'fecha_inicio' => $evento->fecha_inicio,
             'fecha_fin' => $evento->fecha_fin,
+            'dias_activos' => $this->diasActivos($evento),
             'programado_para' => $evento->programado_para,
             'ubicacion' => $evento->ubicacion,
 
@@ -472,6 +525,26 @@ class EventoInscripcionService
         $data = json_decode((string) $json, true);
 
         return is_array($data) ? $data : [];
+    }
+
+    private function diasActivos(object $evento): array
+    {
+        return $this->valoresUnicos($this->normalizarLista(
+            $this->jsonToArray($evento->dias_activos ?? null)
+        ));
+    }
+
+    private function nombreDia(Carbon $fecha): string
+    {
+        return match ((int) $fecha->isoWeekday()) {
+            1 => 'lunes',
+            2 => 'martes',
+            3 => 'miercoles',
+            4 => 'jueves',
+            5 => 'viernes',
+            6 => 'sabado',
+            default => 'domingo',
+        };
     }
 
     private function tieneCriterios(array $criterios): bool

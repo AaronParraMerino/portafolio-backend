@@ -91,6 +91,8 @@ class PublicanteEventoController extends Controller
             'segmentos',
             'targetSelections',
             'target_selections',
+            'activeDays',
+            'dias_activos',
         ]);
 
         $titleRule = $updating ? 'sometimes' : 'required_without:title';
@@ -114,6 +116,10 @@ class PublicanteEventoController extends Controller
             'startsAt' => ['nullable', 'date'],
             'fecha_fin' => ['nullable', 'date'],
             'endsAt' => ['nullable', 'date'],
+            'dias_activos' => ['nullable', 'array'],
+            'dias_activos.*' => ['string', Rule::in($this->eventWeekDays())],
+            'activeDays' => ['nullable', 'array'],
+            'activeDays.*' => ['string', Rule::in($this->eventWeekDays())],
             'ubicacion' => [$locationRule, 'string', 'max:255'],
             'location' => [$locationAliasRule, 'string', 'max:255'],
             'cupo' => ['nullable', 'integer', 'min:0'],
@@ -187,6 +193,19 @@ class PublicanteEventoController extends Controller
             'curso',
             'trabajo',
             'convocatoria',
+        ];
+    }
+
+    private function eventWeekDays(): array
+    {
+        return [
+            'lunes',
+            'martes',
+            'miercoles',
+            'jueves',
+            'viernes',
+            'sabado',
+            'domingo',
         ];
     }
 }

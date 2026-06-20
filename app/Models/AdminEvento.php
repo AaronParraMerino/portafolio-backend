@@ -18,6 +18,7 @@ class AdminEvento extends Model
         'estado',
         'fecha_inicio',
         'fecha_fin',
+        'dias_activos',
         'programado_para',
         'ubicacion',
         'imagen_portada_path',
@@ -39,6 +40,7 @@ class AdminEvento extends Model
         return [
             'fecha_inicio' => 'datetime',
             'fecha_fin' => 'datetime',
+            'dias_activos' => 'array',
             'programado_para' => 'datetime',
             'channels' => 'array',
             'segments' => 'array',
