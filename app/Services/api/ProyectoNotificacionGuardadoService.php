@@ -229,6 +229,55 @@ class ProyectoNotificacionGuardadoService
     }
 
     /**
+     * Actualiza el titulo visible del grupo y notifica el cambio de nombre.
+     */
+    public function notificarProyectoRenombrado(
+        int $idProyecto,
+        int $idUsuarioActor,
+        string $tituloAnterior,
+        string $tituloNuevo
+    ): array {
+        $tituloAnterior = trim($tituloAnterior);
+        $tituloNuevo = trim($tituloNuevo);
+
+        if ($tituloAnterior === '' || $tituloNuevo === '' || $tituloAnterior === $tituloNuevo) {
+            return $this->sinAccion('No hay cambio de titulo notificable');
+        }
+
+        $contextoReferencia = 'proyecto_' . $idProyecto;
+
+        DB::table('notificaciones')
+            ->where('modulo', 'proyectos')
+            ->where('contexto_referencia', $contextoReferencia)
+            ->update([
+                'grupo_titulo' => $tituloNuevo,
+            ]);
+
+        $proyecto = $this->obtenerProyecto($idProyecto);
+
+        if (!$proyecto) {
+            return $this->sinAccion('Proyecto no encontrado');
+        }
+
+        $participantes = $this->obtenerParticipantesActivos($idProyecto, [$idUsuarioActor]);
+
+        if ($participantes->isEmpty()) {
+            return $this->sinAccion('No hay otros participantes para notificar');
+        }
+
+        $nombreUsuario = $this->obtenerNombreUsuario($idUsuarioActor);
+
+        return $this->crearParaUsuarios($participantes, [
+            'id_usuario_actor' => $idUsuarioActor,
+            'tipo' => 'project_renamed',
+            'mensaje' => $nombreUsuario . ' cambio el nombre del proyecto de "' . $tituloAnterior
+                . '" a "' . $tituloNuevo . '".',
+            'contexto_referencia' => $contextoReferencia,
+            'grupo_titulo' => $tituloNuevo,
+        ]);
+    }
+
+    /**
      * Notifica a participantes cuando un proyecto fue eliminado
      */
     public function notificarProyectoEliminado(

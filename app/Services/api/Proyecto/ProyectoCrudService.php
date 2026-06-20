@@ -135,6 +135,12 @@ class ProyectoCrudService
 
     public function update(int $userId, int $idProyecto, array $project, array $payload): array
     {
+        $tituloAnterior = trim((string) ($project['titulo'] ?? ''));
+        $tituloNuevo = array_key_exists('titulo', $payload)
+            ? trim((string) $payload['titulo'])
+            : $tituloAnterior;
+        $tituloCambiado = $tituloNuevo !== '' && $tituloAnterior !== '' && $tituloNuevo !== $tituloAnterior;
+
         DB::transaction(function () use ($payload, $idProyecto, $userId, $project) {
             $projectUpdate = $this->projectUpdate($payload, $project);
             if ($projectUpdate !== []) {
@@ -154,10 +160,22 @@ class ProyectoCrudService
         });
 
         $this->proyectoEnlaceService->sync($userId, $idProyecto, $payload);
+        $payloadActualizacion = $tituloCambiado
+            ? array_diff_key($payload, ['titulo' => true])
+            : $payload;
+
+        if ($tituloCambiado) {
+            $this->proyectoNotificacionGuardadoService->notificarProyectoRenombrado(
+                idProyecto: $idProyecto,
+                idUsuarioActor: $userId,
+                tituloAnterior: $tituloAnterior,
+                tituloNuevo: $tituloNuevo
+            );
+        }
         $this->proyectoNotificacionGuardadoService->notificarProyectoActualizado(
             idProyecto: $idProyecto,
             idUsuarioActor: $userId,
-            payload: $payload
+            payload: $payloadActualizacion
         );
 
         return $this->serializedProject($userId, $idProyecto);
