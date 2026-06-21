@@ -32,6 +32,8 @@ require __DIR__.'/api/busqueda.php';
 
 ##################api notificaiones##############################
 require __DIR__.'/api/notificaciones.php';
+require __DIR__.'/api/mensajeria.php';
+require __DIR__.'/api/denuncias.php';
 
 ##################api ver eventos##############################
 require __DIR__.'/api/eventos.php';

@@ -1,24 +1,25 @@
 <?php
 
-namespace App\Services\api;
+namespace App\Services\api\Notificaciones;
 
-use App\Services\api\Notificaciones\NotificacionCoreService;
-
-class NotificacionService
+class NotificacionCoreService
 {
     public function __construct(
-        private readonly NotificacionCoreService $core
+        private readonly NotificacionPendienteService $pendientes,
+        private readonly NotificacionLeidaService $leidas,
+        private readonly NotificacionLecturaService $lectura,
+        private readonly NotificacionAccionPersonalService $accionPersonalService
     ) {
     }
 
     public function obtenerResumenModulosNoLeidos(int $idUsuario): array
     {
-        return $this->core->obtenerResumenModulosNoLeidos($idUsuario);
+        return $this->pendientes->obtenerResumenModulosNoLeidos($idUsuario);
     }
 
     public function obtenerSegundoNivelPorModulo(int $idUsuario, string $modulo): array
     {
-        return $this->core->obtenerSegundoNivelPorModulo($idUsuario, $modulo);
+        return $this->pendientes->obtenerSegundoNivelPorModulo($idUsuario, $modulo);
     }
 
     public function obtenerMensajesNoLeidosPorGrupo(
@@ -26,17 +27,17 @@ class NotificacionService
         string $modulo,
         string $contextoReferencia
     ): array {
-        return $this->core->obtenerMensajesNoLeidosPorGrupo($idUsuario, $modulo, $contextoReferencia);
+        return $this->pendientes->obtenerMensajesNoLeidosPorGrupo($idUsuario, $modulo, $contextoReferencia);
     }
 
     public function marcarNotificacionComoLeida(int $idUsuario, int $idNotificacion): array
     {
-        return $this->core->marcarNotificacionComoLeida($idUsuario, $idNotificacion);
+        return $this->lectura->marcarNotificacionComoLeida($idUsuario, $idNotificacion);
     }
 
     public function marcarNotificacionComoNoLeida(int $idUsuario, int $idNotificacion): array
     {
-        return $this->core->marcarNotificacionComoNoLeida($idUsuario, $idNotificacion);
+        return $this->lectura->marcarNotificacionComoNoLeida($idUsuario, $idNotificacion);
     }
 
     public function marcarGrupoComoLeido(
@@ -44,27 +45,27 @@ class NotificacionService
         string $modulo,
         string $contextoReferencia
     ): array {
-        return $this->core->marcarGrupoComoLeido($idUsuario, $modulo, $contextoReferencia);
+        return $this->lectura->marcarGrupoComoLeido($idUsuario, $modulo, $contextoReferencia);
     }
 
     public function marcarModuloComoLeido(int $idUsuario, string $modulo): array
     {
-        return $this->core->marcarModuloComoLeido($idUsuario, $modulo);
+        return $this->lectura->marcarModuloComoLeido($idUsuario, $modulo);
     }
 
     public function marcarTodasComoLeidas(int $idUsuario): array
     {
-        return $this->core->marcarTodasComoLeidas($idUsuario);
+        return $this->lectura->marcarTodasComoLeidas($idUsuario);
     }
 
     public function contarNoLeidas(int $idUsuario): int
     {
-        return $this->core->contarNoLeidas($idUsuario);
+        return $this->lectura->contarNoLeidas($idUsuario);
     }
 
     public function responderAccionPersonal(int $idUsuario, int $idNotificacion, string $accion): array
     {
-        return $this->core->responderAccionPersonal($idUsuario, $idNotificacion, $accion);
+        return $this->accionPersonalService->responder($idUsuario, $idNotificacion, $accion);
     }
 
     public function obtenerNotificacionesLeidas(
@@ -72,12 +73,12 @@ class NotificacionService
         ?string $modulo = null,
         int $porPagina = 20
     ): array {
-        return $this->core->obtenerNotificacionesLeidas($idUsuario, $modulo, $porPagina);
+        return $this->leidas->obtenerNotificacionesLeidas($idUsuario, $modulo, $porPagina);
     }
 
     public function obtenerResumenModulosLeidos(int $idUsuario): array
     {
-        return $this->core->obtenerResumenModulosLeidos($idUsuario);
+        return $this->leidas->obtenerResumenModulosLeidos($idUsuario);
     }
 
     public function obtenerSegundoNivelLeidasPorModulo(
@@ -85,7 +86,7 @@ class NotificacionService
         string $modulo,
         int $porPagina = 20
     ): array {
-        return $this->core->obtenerSegundoNivelLeidasPorModulo($idUsuario, $modulo, $porPagina);
+        return $this->leidas->obtenerSegundoNivelLeidasPorModulo($idUsuario, $modulo, $porPagina);
     }
 
     public function obtenerMensajesLeidosPorGrupo(
@@ -94,6 +95,6 @@ class NotificacionService
         string $contextoReferencia,
         int $porPagina = 20
     ): array {
-        return $this->core->obtenerMensajesLeidosPorGrupo($idUsuario, $modulo, $contextoReferencia, $porPagina);
+        return $this->leidas->obtenerMensajesLeidosPorGrupo($idUsuario, $modulo, $contextoReferencia, $porPagina);
     }
 }

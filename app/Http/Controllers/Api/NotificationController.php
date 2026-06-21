@@ -111,6 +111,31 @@ class NotificationController extends Controller
     }
 
     /**
+     * Responde una accion personal de notificacion.
+     */
+    public function respondAction(Request $request, int $userId, int $notificationId): JsonResponse
+    {
+        if ($response = $this->rejectOtherUser($request, $userId)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'accion' => 'required|string|in:aceptar,rechazar',
+        ]);
+
+        $response = $this->service->responderAccionPersonal(
+            $userId,
+            $notificationId,
+            $data['accion']
+        );
+
+        return response()->json(
+            $response,
+            $this->getStatusCode($response)
+        );
+    }
+
+    /**
      * Marca un grupo como leido
      */
     public function markGroupAsRead(Request $request, int $userId): JsonResponse
@@ -308,8 +333,15 @@ class NotificationController extends Controller
     {
         return match ($response['status'] ?? 'success') {
             'not_found' => 404,
+            'forbidden' => 403,
+            'blocked' => 403,
             'invalid_payload' => 422,
             'invalid_module' => 422,
+            'invalid_state' => 409,
+            'already_pending' => 409,
+            'already_member' => 409,
+            'cooldown' => 429,
+            'expired' => 410,
             default => 200,
         };
     }
