@@ -7,6 +7,10 @@ use Illuminate\Support\Facades\DB;
 
 class ExperienciaService
 {
+    public function __construct(private readonly ContenidoAutoTraduccionService $autoTraduccionService)
+    {
+    }
+
     public function getByUserId(int $userId)
     {
         return Experiencia::where('usuario_id', $userId)
@@ -67,11 +71,23 @@ class ExperienciaService
         $data['usuario_id'] = $userId;
         $data['fecha_modificacion'] = now();
 
-        return DB::transaction(function () use ($data) {
+        $experiencia = DB::transaction(function () use ($data) {
             $id = DB::table('experiencias')->insertGetId($data, 'id_experiencia');
 
             return Experiencia::findOrFail($id);
         });
+
+        $this->autoTraduccionService->traducirEntidad(
+            'experiencia',
+            (int) $experiencia->id_experiencia,
+            $userId,
+            [
+                'cargo' => $experiencia->cargo,
+                'descripcion' => $experiencia->descripcion,
+            ]
+        );
+
+        return $experiencia;
     }
 
     public function update(Experiencia $experiencia, array $data): Experiencia
@@ -81,20 +97,36 @@ class ExperienciaService
         $this->ensureNotDuplicate($experiencia->usuario_id, $merged, $experiencia->id_experiencia);
         $data['fecha_modificacion'] = now();
 
-        return DB::transaction(function () use ($experiencia, $data) {
+        $actualizada = DB::transaction(function () use ($experiencia, $data) {
             DB::table('experiencias')
                 ->where('id_experiencia', $experiencia->id_experiencia)
                 ->update($data);
 
             return $experiencia->fresh();
         });
+
+        $camposTraducibles = array_intersect_key($data, array_flip(['cargo', 'descripcion']));
+        if ($camposTraducibles !== []) {
+            $this->autoTraduccionService->traducirEntidad(
+                'experiencia',
+                (int) $actualizada->id_experiencia,
+                (int) $actualizada->usuario_id,
+                $camposTraducibles
+            );
+        }
+
+        return $actualizada;
     }
 
     public function delete(Experiencia $experiencia): void
     {
+        $idExperiencia = (int) $experiencia->id_experiencia;
+
         DB::transaction(function () use ($experiencia) {
             $experiencia->delete();
         });
+
+        $this->autoTraduccionService->eliminarEntidad('experiencia', $idExperiencia);
     }
 
     private function normalizeData(array $data): array

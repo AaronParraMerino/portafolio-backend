@@ -9,6 +9,10 @@ use Illuminate\Support\Facades\DB;
 
 class HabilidadService
 {
+    public function __construct(private readonly ContenidoAutoTraduccionService $autoTraduccionService)
+    {
+    }
+
     public function getCatalog(?string $tipo = null)
     {
         $query = Habilidad::query()->whereRaw('estado = true');
@@ -20,7 +24,7 @@ class HabilidadService
         return $query->orderBy('tipo')->orderBy('nombre')->get();
     }
 
-    public function createCatalog(array $data): Habilidad
+    public function createCatalog(array $data, ?int $userId = null): Habilidad
     {
         $nombreNormalizado = $this->normalizeName($data['nombre']);
         $existing = $this->findExistingCatalogByNormalizedName($nombreNormalizado);
@@ -32,7 +36,7 @@ class HabilidadService
         }
 
         try {
-            return Habilidad::create([
+            $habilidad = Habilidad::create([
                 'nombre' => trim($data['nombre']),
                 'nombre_normalizado' => $nombreNormalizado,
                 'tipo' => $data['tipo'],
@@ -45,6 +49,18 @@ class HabilidadService
 
             throw $e;
         }
+
+        $this->autoTraduccionService->traducirEntidad(
+            'habilidad',
+            (int) $habilidad->id_habilidad,
+            $userId,
+            [
+                'nombre' => $habilidad->nombre,
+                'descripcion' => $habilidad->descripcion,
+            ]
+        );
+
+        return $habilidad;
     }
 
     public function getByUserId(int $userId)
@@ -65,7 +81,7 @@ class HabilidadService
 
     public function assignToUser(int $userId, array $data): HabilidadUsuario
     {
-        $habilidadId = $this->resolveHabilidadId($data);
+        $habilidadId = $this->resolveHabilidadId($data, $userId);
 
         $exists = HabilidadUsuario::where('usuario_id', $userId)
             ->where('habilidad_id', $habilidadId)
@@ -91,7 +107,7 @@ class HabilidadService
         $habilidadId = $habilidadUsuario->habilidad_id;
 
         if (!empty($data['habilidad_id']) || !empty($data['nombre'])) {
-            $habilidadId = $this->resolveHabilidadId($data);
+            $habilidadId = $this->resolveHabilidadId($data, (int) $habilidadUsuario->usuario_id);
 
             $exists = HabilidadUsuario::where('usuario_id', $habilidadUsuario->usuario_id)
                 ->where('habilidad_id', $habilidadId)
@@ -124,7 +140,7 @@ class HabilidadService
         });
     }
 
-    private function resolveHabilidadId(array $data): int
+    private function resolveHabilidadId(array $data, ?int $userId = null): int
     {
         if (!empty($data['habilidad_id'])) {
             return (int) $data['habilidad_id'];
@@ -134,7 +150,7 @@ class HabilidadService
             'nombre' => $data['nombre'],
             'tipo' => $data['tipo'],
             'descripcion' => $data['descripcion'] ?? null,
-        ]);
+        ], $userId);
 
         return $habilidad->id_habilidad;
     }

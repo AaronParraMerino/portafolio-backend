@@ -85,13 +85,24 @@ class NotificacionService
             ->groupBy('n.contexto_referencia', 'n.grupo_titulo')
             ->orderByDesc('ultimo_creado_en')
             ->get()
-            ->map(function ($row) {
-                return [
+            ->reduce(function (Collection $carry, $row) {
+                $key = $row->contexto_referencia ?: '__sin_contexto__';
+                $current = $carry->get($key);
+
+                if ($current) {
+                    $current['cantidad'] += (int) $row->cantidad;
+                    $carry->put($key, $current);
+                    return $carry;
+                }
+
+                $carry->put($key, [
                     'contexto_referencia' => $row->contexto_referencia,
                     'titulo' => $row->grupo_titulo ?: 'Sin grupo',
                     'cantidad' => (int) $row->cantidad,
-                ];
-            })
+                ]);
+
+                return $carry;
+            }, collect())
             ->values()
             ->all();
 
@@ -481,14 +492,25 @@ class NotificacionService
             ->orderByDesc('ultimo_leido_en')
             ->orderByDesc('ultimo_creado_en')
             ->get()
-            ->map(function ($row) {
-                return [
+            ->reduce(function (Collection $carry, $row) {
+                $key = $row->contexto_referencia ?: '__sin_contexto__';
+                $current = $carry->get($key);
+
+                if ($current) {
+                    $current['cantidad'] += (int) $row->cantidad;
+                    $carry->put($key, $current);
+                    return $carry;
+                }
+
+                $carry->put($key, [
                     'contexto_referencia' => $row->contexto_referencia,
                     'titulo' => $row->grupo_titulo ?: 'Sin grupo',
                     'cantidad' => (int) $row->cantidad,
                     'ultimo_leido_en' => $this->formatUtcDateTime($row->ultimo_leido_en),
-                ];
-            })
+                ]);
+
+                return $carry;
+            }, collect())
             ->values()
             ->all();
 

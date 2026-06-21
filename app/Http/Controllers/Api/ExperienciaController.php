@@ -33,7 +33,7 @@ class ExperienciaController extends Controller
         return response()->json($experiencias);
     }
 
-    public function show(int $userId, int $id): JsonResponse
+    public function show(Request $request, int $userId, int $id): JsonResponse
     {
         $experiencia = $this->experienciaService->findOwnedById($userId, $id);
 
@@ -43,7 +43,9 @@ class ExperienciaController extends Controller
             ], 404);
         }
 
-        return response()->json($experiencia);
+        return response()->json(
+            $this->traducirExperiencia($experiencia, $request->query('lang', 'es'))
+        );
     }
 
     public function store(Request $request, int $userId): JsonResponse

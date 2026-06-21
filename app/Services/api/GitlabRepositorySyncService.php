@@ -20,6 +20,7 @@ class GitlabRepositorySyncService
     public function __construct(
         private readonly GitlabOAuthService $gitlabOAuthService,
         private readonly ProyectoProveedorDesvinculacionService $proyectoProveedorDesvinculacionService,
+        private readonly ContenidoAutoTraduccionService $autoTraduccionService,
     ) {}
 
     public function syncForUsuario(int $usuarioId): array
@@ -446,6 +447,8 @@ class GitlabRepositorySyncService
                     'updated_at' => now(),
                 ]);
         });
+
+        $this->traducirParticipacion($usuarioId, (int) $participacion->id_participacion);
     }
 
     private function ensureParticipacionForProject(int $usuarioId, int $idProyecto, array $participacionData = []): ?object
@@ -495,11 +498,36 @@ class GitlabRepositorySyncService
             $participacion = DB::table('participaciones')->where('id_participacion', $idParticipacion)->first();
         }
 
-        return DB::table('participaciones')
+        $participacion = DB::table('participaciones')
             ->where('id_usuario', $usuarioId)
             ->where('id_proyecto', $idProyecto)
             ->whereNull('deleted_at')
             ->first();
+
+        if ($participacion) {
+            $this->traducirParticipacion($usuarioId, (int) $participacion->id_participacion);
+        }
+
+        return $participacion;
+    }
+
+    private function traducirParticipacion(int $usuarioId, int $participacionId): void
+    {
+        $participacion = DB::table('participaciones')
+            ->where('id_participacion', $participacionId)
+            ->first(['rol', 'descripcion_aporte']);
+
+        if ($participacion) {
+            $this->autoTraduccionService->traducirEntidad(
+                'participacion',
+                $participacionId,
+                $usuarioId,
+                [
+                    'rol' => $participacion->rol,
+                    'descripcion_aporte' => $participacion->descripcion_aporte,
+                ]
+            );
+        }
     }
 
     private function fillGitlabRepoDetails(RepositorioGithub $remoteRepo, array $project, string $accessToken): void

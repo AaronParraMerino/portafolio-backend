@@ -478,6 +478,8 @@ class AdminEventoService
             'fecha_inicio' => $this->formatDateTime($event->fecha_inicio),
             'endsAt' => $this->formatDateTime($event->fecha_fin),
             'fecha_fin' => $this->formatDateTime($event->fecha_fin),
+            'activeDays' => $event->dias_activos ?? [],
+            'dias_activos' => $event->dias_activos ?? [],
             'sendAt' => $this->formatDateTime($event->programado_para),
             'programado_para' => $this->formatDateTime($event->programado_para),
             'date' => $event->fecha_inicio?->format('Y-m-d'),
@@ -574,6 +576,7 @@ class AdminEventoService
             'estado' => $data['estado'] ?? $data['status'] ?? 'borrador',
             'fecha_inicio' => $data['fecha_inicio'] ?? $data['startsAt'] ?? null,
             'fecha_fin' => $data['fecha_fin'] ?? $data['endsAt'] ?? null,
+            'dias_activos' => $this->normalizeActiveDays($data['dias_activos'] ?? $data['activeDays'] ?? []),
             'programado_para' => $data['programado_para'] ?? $data['sendAt'] ?? null,
             'ubicacion' => $data['ubicacion'] ?? $data['location'],
             'cupo' => $data['cupo'] ?? $data['capacity'] ?? 0,
@@ -605,6 +608,28 @@ class AdminEventoService
             'academicExperience' => $this->normalizeStringList($source['academicExperience'] ?? []),
             'workExperience' => $this->normalizeStringList($source['workExperience'] ?? []),
         ];
+    }
+
+    private function normalizeActiveDays($value): array
+    {
+        $valid = [
+            'lunes',
+            'martes',
+            'miercoles',
+            'jueves',
+            'viernes',
+            'sabado',
+            'domingo',
+        ];
+
+        if (! is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(
+            array_map(fn ($item) => Str::of((string) $item)->lower()->ascii()->trim()->toString(), $value),
+            fn ($item) => in_array($item, $valid, true)
+        )));
     }
 
     private function buildSegments($segments, array $targetSelections): array

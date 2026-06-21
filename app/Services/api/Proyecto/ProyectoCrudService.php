@@ -2,6 +2,7 @@
 
 namespace App\Services\api\Proyecto;
 
+use App\Services\api\ContenidoAutoTraduccionService;
 use App\Services\api\GithubRepositorySyncService;
 use App\Services\api\ProyectoNotificacionGuardadoService;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,7 @@ class ProyectoCrudService
         private readonly ProyectoConsultaService $proyectoConsultaService,
         private readonly ProyectoSerializer $proyectoSerializer,
         private readonly ProyectoEnlaceService $proyectoEnlaceService,
+        private readonly ContenidoAutoTraduccionService $autoTraduccionService,
     ) {}
 
     public static function validationRules(bool $partial = false): array
@@ -73,6 +75,8 @@ class ProyectoCrudService
                 idUsuarioActor: $userId
             );
 
+            $this->traducirParticipacion($userId, $idProyecto, true);
+
             return [
                 'body' => [
                     'message' => 'Este repositorio ya tenia un proyecto vinculado; se agrego tu participacion al proyecto existente.',
@@ -129,12 +133,23 @@ class ProyectoCrudService
         });
 
         $this->proyectoEnlaceService->sync($userId, $idProyecto, $payload);
+        $this->traducirProyecto($userId, $idProyecto, [
+            'titulo' => $payload['titulo'],
+            'descripcion' => $payload['descripcion'] ?? null,
+        ]);
+        $this->traducirParticipacion($userId, $idProyecto, true);
 
         return ['body' => ['data' => $this->serializedProject($userId, $idProyecto)], 'status' => 201];
     }
 
     public function update(int $userId, int $idProyecto, array $project, array $payload): array
     {
+        $tituloAnterior = trim((string) ($project['titulo'] ?? ''));
+        $tituloNuevo = array_key_exists('titulo', $payload)
+            ? trim((string) $payload['titulo'])
+            : $tituloAnterior;
+        $tituloCambiado = $tituloNuevo !== '' && $tituloAnterior !== '' && $tituloNuevo !== $tituloAnterior;
+
         DB::transaction(function () use ($payload, $idProyecto, $userId, $project) {
             $projectUpdate = $this->projectUpdate($payload, $project);
             if ($projectUpdate !== []) {
@@ -153,14 +168,81 @@ class ProyectoCrudService
             }
         });
 
+        $camposProyecto = array_intersect_key($payload, array_flip(['titulo', 'descripcion']));
+        if ($camposProyecto !== []) {
+            $this->traducirProyecto($userId, $idProyecto, $camposProyecto);
+        }
+
+        if (array_intersect_key($payload, array_flip(['rol', 'descripcion_aporte'])) !== []) {
+            $this->traducirParticipacion($userId, $idProyecto, false, $payload);
+        }
+
         $this->proyectoEnlaceService->sync($userId, $idProyecto, $payload);
+        $payloadActualizacion = $tituloCambiado
+            ? array_diff_key($payload, ['titulo' => true])
+            : $payload;
+
+        if ($tituloCambiado) {
+            $this->proyectoNotificacionGuardadoService->notificarProyectoRenombrado(
+                idProyecto: $idProyecto,
+                idUsuarioActor: $userId,
+                tituloAnterior: $tituloAnterior,
+                tituloNuevo: $tituloNuevo
+            );
+        }
         $this->proyectoNotificacionGuardadoService->notificarProyectoActualizado(
             idProyecto: $idProyecto,
             idUsuarioActor: $userId,
-            payload: $payload
+            payload: $payloadActualizacion
         );
 
         return $this->serializedProject($userId, $idProyecto);
+    }
+
+    private function traducirProyecto(int $userId, int $idProyecto, array $campos): void
+    {
+        $this->autoTraduccionService->traducirEntidad(
+            'proyecto',
+            $idProyecto,
+            $userId,
+            array_intersect_key($campos, array_flip(['titulo', 'descripcion']))
+        );
+    }
+
+    private function traducirParticipacion(
+        int $userId,
+        int $idProyecto,
+        bool $todosLosCampos = false,
+        array $payload = []
+    ): void {
+        $participacion = DB::table('participaciones')
+            ->where('id_usuario', $userId)
+            ->where('id_proyecto', $idProyecto)
+            ->whereNull('deleted_at')
+            ->first();
+
+        if (! $participacion) {
+            return;
+        }
+
+        $campos = [
+            'rol' => $participacion->rol,
+            'descripcion_aporte' => $participacion->descripcion_aporte,
+        ];
+
+        if (! $todosLosCampos) {
+            $campos = array_intersect_key($campos, array_intersect_key(
+                $payload,
+                array_flip(['rol', 'descripcion_aporte'])
+            ));
+        }
+
+        $this->autoTraduccionService->traducirEntidad(
+            'participacion',
+            (int) $participacion->id_participacion,
+            $userId,
+            $campos
+        );
     }
 
     private function serializedProject(int $userId, int $idProyecto): array

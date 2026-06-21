@@ -2,6 +2,7 @@
 
 namespace App\Services\api\Proyecto;
 
+use App\Services\api\ContenidoAutoTraduccionService;
 use App\Services\api\ProfileImageVariantService;
 use App\Services\api\ProyectoNotificacionGuardadoService;
 use Illuminate\Support\Collection;
@@ -13,6 +14,7 @@ class ProyectoCicloVidaService
     public function __construct(
         private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
         private readonly ProfileImageVariantService $profileImageVariants,
+        private readonly ContenidoAutoTraduccionService $autoTraduccionService,
     ) {}
 
     public function deletionPreview(int $idProyecto): array
@@ -153,6 +155,10 @@ class ProyectoCicloVidaService
 
     private function permanentlyDelete(int $userId, int $idProyecto, array $preview): array
     {
+        $participacionIds = DB::table('participaciones')
+            ->where('id_proyecto', $idProyecto)
+            ->pluck('id_participacion');
+
         $evidences = DB::table('proyecto_evidencias')
             ->where('id_proyecto', $idProyecto)
             ->get(['tipo', 'url', 'archivo_path']);
@@ -171,6 +177,11 @@ class ProyectoCicloVidaService
 
             DB::table('proyectos')->where('id_proyecto', $idProyecto)->delete();
         });
+
+        $this->autoTraduccionService->eliminarEntidad('proyecto', $idProyecto);
+        foreach ($participacionIds as $participacionId) {
+            $this->autoTraduccionService->eliminarEntidad('participacion', (int) $participacionId);
+        }
 
         $this->deleteEvidenceFiles($evidences);
 

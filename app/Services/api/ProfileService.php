@@ -13,7 +13,8 @@ use App\Services\BitacoraService;
 class ProfileService
 {
     public function __construct(
-        private readonly ProfileImageVariantService $imageVariants
+        private readonly ProfileImageVariantService $imageVariants,
+        private readonly ContenidoAutoTraduccionService $autoTraduccionService
     ) {
     }
  
@@ -181,6 +182,19 @@ class ProfileService
                 $this->updatePerfil($userId, $dataperfil);
             }
         });
+
+        if ($dataperfil !== []) {
+            $perfil = Perfil::where('usuario_id', $userId)->first();
+
+            if ($perfil) {
+                $this->autoTraduccionService->traducirEntidad(
+                    'perfil',
+                    (int) $perfil->id_perfil,
+                    $userId,
+                    array_intersect_key($dataperfil, array_flip(['profesion', 'biografia']))
+                );
+            }
+        }
 
         return $this->getProfile($userId);
     }
@@ -557,4 +571,3 @@ class ProfileService
         ];
     }
 }
-
