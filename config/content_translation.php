@@ -5,6 +5,7 @@ return [
     'provider' => env('CONTENT_TRANSLATION_PROVIDER', 'fake'),
     'api_url' => env('CONTENT_TRANSLATION_API_URL'),
     'api_key' => env('CONTENT_TRANSLATION_API_KEY'),
+    'email' => env('CONTENT_TRANSLATION_EMAIL'),
     'source_lang' => env('CONTENT_TRANSLATION_SOURCE_LANG', 'es'),
     'target_langs' => array_values(array_filter(array_map(
         'trim',
