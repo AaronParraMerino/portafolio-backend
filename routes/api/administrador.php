@@ -10,6 +10,7 @@ Route::prefix('administrador')->middleware(['auth:sanctum', 'account.writable'])
     require __DIR__ . '/administrador/plantillas.php';
     require __DIR__ . '/administrador/eventos.php';
     require __DIR__ . '/administrador/publicantes.php';
+    require __DIR__ . '/administrador/denuncias.php';
     require __DIR__ . '/administrador/reportes.php';
     require __DIR__ . '/administrador/respaldos.php';
 });
