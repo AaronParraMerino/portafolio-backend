@@ -46,12 +46,12 @@ class UsuarioEstadoController extends Controller
             return $forbidden;
         }
 
-        $reason = $this->reason(
+        [$reason, $channels] = $this->noticeOptions(
             $request,
             'Tu cuenta fue puesta en pausa por administracion. Durante este periodo solo puedes consultar tu informacion.'
         );
 
-        return $this->response($this->adminUsuarioEstadoService->pause($this->adminId($request), $id, $reason));
+        return $this->response($this->adminUsuarioEstadoService->pause($this->adminId($request), $id, $reason, $channels));
     }
 
     public function block(Request $request, int $id): JsonResponse
@@ -60,12 +60,12 @@ class UsuarioEstadoController extends Controller
             return $forbidden;
         }
 
-        $reason = $this->reason(
+        [$reason, $channels] = $this->noticeOptions(
             $request,
             'Tu cuenta fue bloqueada por administracion. Contacta al equipo de soporte para mas informacion.'
         );
 
-        return $this->response($this->adminUsuarioEstadoService->block($this->adminId($request), $id, $reason));
+        return $this->response($this->adminUsuarioEstadoService->block($this->adminId($request), $id, $reason, $channels));
     }
 
     private function noticeOptions(Request $request, string $defaultMessage): array
@@ -80,13 +80,6 @@ class UsuarioEstadoController extends Controller
             trim((string) ($data['razon'] ?? '')) ?: $defaultMessage,
             $data['canales'] ?? ['inapp', 'email'],
         ];
-    }
-
-    private function reason(Request $request, string $defaultReason): string
-    {
-        $data = $request->validate(['razon' => ['nullable', 'string', 'max:1000']]);
-
-        return trim((string) ($data['razon'] ?? '')) ?: $defaultReason;
     }
 
     private function response(array $result): JsonResponse

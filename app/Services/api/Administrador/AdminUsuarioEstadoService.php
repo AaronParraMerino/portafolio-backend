@@ -85,7 +85,7 @@ class AdminUsuarioEstadoService
         );
     }
 
-    public function pause(int $adminId, int $userId, string $reason): array
+    public function pause(int $adminId, int $userId, string $reason, array $channels): array
     {
         $user = $this->usuarioService->findById($userId);
         if (! $user) {
@@ -99,19 +99,30 @@ class AdminUsuarioEstadoService
         }
 
         $this->usuarioService->pause($user);
-        $this->createInAppNotice($adminId, $user, $reason, 'cuenta', 'media', ['inapp']);
+        [$sent, $failed] = $this->notify(
+            $adminId,
+            $user,
+            $reason,
+            $channels,
+            'media',
+            'Tu cuenta ha sido puesta en pausa',
+            'emails.cuenta_pausada',
+            'pausa'
+        );
 
         return $this->success(
-            'Cuenta puesta en pausa y motivo registrado correctamente.',
+            empty($failed)
+                ? 'Cuenta puesta en pausa y aviso enviado correctamente.'
+                : 'Cuenta puesta en pausa. No fue posible enviar todos los avisos.',
             $user,
             'pausado',
             $reason,
-            ['inapp'],
-            []
+            $sent,
+            $failed
         );
     }
 
-    public function block(int $adminId, int $userId, string $reason): array
+    public function block(int $adminId, int $userId, string $reason, array $channels): array
     {
         $user = $this->usuarioService->findById($userId);
         if (! $user) {
@@ -122,15 +133,26 @@ class AdminUsuarioEstadoService
         }
 
         $this->usuarioService->block($user);
-        $this->createInAppNotice($adminId, $user, $reason, 'seguridad', 'alta', ['inapp']);
+        [$sent, $failed] = $this->notify(
+            $adminId,
+            $user,
+            $reason,
+            $channels,
+            'alta',
+            'Tu cuenta ha sido bloqueada',
+            'emails.cuenta_bloqueada',
+            'bloqueo'
+        );
 
         return $this->success(
-            'Cuenta bloqueada y motivo registrado correctamente.',
+            empty($failed)
+                ? 'Cuenta bloqueada y aviso enviado correctamente.'
+                : 'Cuenta bloqueada. No fue posible enviar todos los avisos.',
             $user,
             'bloqueado',
             $reason,
-            ['inapp'],
-            []
+            $sent,
+            $failed
         );
     }
 
@@ -148,7 +170,7 @@ class AdminUsuarioEstadoService
         $failed = [];
 
         if (in_array('inapp', $channels, true)) {
-            $this->createInAppNotice($adminId, $user, $message, 'cuenta', $urgency, $channels);
+            $this->createInAppNotice($adminId, $user, $message, 'cuenta', $urgency, $channels, $subject);
             $sent[] = 'inapp';
         }
 
@@ -175,9 +197,11 @@ class AdminUsuarioEstadoService
         string $type,
         string $urgency,
         array $channels,
+        string $title = 'Administracion',
     ): void {
         $this->adminNotificationGuardadoService->createAdminNotice($adminId, [
             'destinatarios' => [$user->id_usuario],
+            'titulo' => $title,
             'mensaje' => $message,
             'tipo' => $type,
             'urgencia' => $urgency,
