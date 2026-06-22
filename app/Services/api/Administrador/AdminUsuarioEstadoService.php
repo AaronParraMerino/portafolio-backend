@@ -4,8 +4,8 @@ namespace App\Services\api\Administrador;
 
 use App\Models\Usuario;
 use App\Services\api\AdminNotificacionGuardadoService;
+use App\Services\api\CorreoEnvioService;
 use App\Services\api\UsuarioService;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -14,6 +14,7 @@ class AdminUsuarioEstadoService
     public function __construct(
         private readonly UsuarioService $usuarioService,
         private readonly AdminNotificacionGuardadoService $adminNotificationGuardadoService,
+        private readonly ?CorreoEnvioService $correoEnvioService = null,
     ) {}
 
     public function activate(int $adminId, int $userId, string $message, array $channels): array
@@ -212,31 +213,11 @@ class AdminUsuarioEstadoService
 
     private function sendEmail(Usuario $user, string $message, string $subject, string $view): void
     {
-        $apiKey = (string) env('SENDGRID_API_KEY', '');
-        $fromEmail = (string) env('SENDGRID_FROM_ADDRESS', env('MAIL_FROM_ADDRESS', ''));
-        $fromName = (string) env('SENDGRID_FROM_NAME', env('MAIL_FROM_NAME', 'Portafolio'));
-        $apiUrl = (string) env('SENDGRID_API_URL', 'https://api.sendgrid.com/v3/mail/send');
-
-        if ($apiKey === '' || $fromEmail === '') {
-            throw new \RuntimeException('Falta SENDGRID_API_KEY o SENDGRID_FROM_ADDRESS en .env');
-        }
-
-        $html = view($view, [
+        ($this->correoEnvioService ?? app(CorreoEnvioService::class))->enviarVista($user->correo, $subject, $view, [
             'nombre' => trim($user->nombre.' '.$user->apellido),
             'mensaje' => $message,
             'razon' => $message,
-        ])->render();
-
-        $response = Http::withToken($apiKey)->acceptJson()->post($apiUrl, [
-            'personalizations' => [['to' => [['email' => $user->correo]]]],
-            'from' => ['email' => $fromEmail, 'name' => $fromName],
-            'subject' => $subject,
-            'content' => [['type' => 'text/html', 'value' => $html]],
         ]);
-
-        if (! $response->successful()) {
-            throw new \RuntimeException('SendGrid API error '.$response->status().': '.$response->body());
-        }
     }
 
     private function success(

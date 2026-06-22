@@ -5,20 +5,21 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\TokenRecuperacion;
 use App\Models\Usuario;
+use App\Services\api\CorreoEnvioService;
 use App\Services\api\SeccionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
 
 class ReactivacionCuentaController extends Controller
 {
-    public function __construct(private readonly SeccionService $seccionService)
-    {
-    }
+    public function __construct(
+        private readonly SeccionService $seccionService,
+        private readonly CorreoEnvioService $correoEnvioService,
+    ) {}
 
     public function solicitar(Request $request)
     {
@@ -69,7 +70,16 @@ class ReactivacionCuentaController extends Controller
         }
 
         try {
-            $this->sendReactivationCodeWithSendGridApi($correo, $codigoPlano);
+            $this->correoEnvioService->enviarVista(
+                $correo,
+                'Codigo de reactivacion de cuenta',
+                'emails.codigo_reactivacion',
+                [
+                    'codigo' => $codigoPlano,
+                    'correo' => $correo,
+                    'minutosExpiracion' => 6,
+                ]
+            );
         } catch (\Throwable $exception) {
             Log::error('No se pudo enviar el correo de reactivacion.', [
                 'correo' => $correo,
@@ -138,38 +148,4 @@ class ReactivacionCuentaController extends Controller
         ], 200);
     }
 
-    private function sendReactivationCodeWithSendGridApi(string $toEmail, string $codigoPlano): void
-    {
-        $apiKey = (string) env('SENDGRID_API_KEY', '');
-        $fromEmail = (string) env('SENDGRID_FROM_ADDRESS', env('MAIL_FROM_ADDRESS', ''));
-        $fromName = (string) env('SENDGRID_FROM_NAME', env('MAIL_FROM_NAME', 'Portafolio'));
-        $apiUrl = (string) env('SENDGRID_API_URL', 'https://api.sendgrid.com/v3/mail/send');
-
-        if ($apiKey === '' || $fromEmail === '') {
-            throw new \RuntimeException('Falta SENDGRID_API_KEY o SENDGRID_FROM_ADDRESS en .env');
-        }
-
-        $response = Http::withToken($apiKey)
-            ->acceptJson()
-            ->post($apiUrl, [
-                'personalizations' => [[
-                    'to' => [[
-                        'email' => $toEmail,
-                    ]],
-                ]],
-                'from' => [
-                    'email' => $fromEmail,
-                    'name' => $fromName,
-                ],
-                'subject' => 'Codigo de reactivacion de cuenta',
-                'content' => [[
-                    'type' => 'text/plain',
-                    'value' => "Tu codigo para restablecer la cuenta es: {$codigoPlano}. Expira en 6 minutos.",
-                ]],
-            ]);
-
-        if (! $response->successful()) {
-            throw new \RuntimeException('SendGrid API error '.$response->status().': '.$response->body());
-        }
-    }
 }
