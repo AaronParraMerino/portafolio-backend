@@ -7,16 +7,21 @@ Route::get('chats/{chatId}/mensajes', [MensajeriaController::class, 'mensajes'])
     ->whereNumber('chatId');
 
 Route::post('chats/{chatId}/mensajes', [MensajeriaController::class, 'enviarMensaje'])
-    ->whereNumber('chatId');
+    ->whereNumber('chatId')
+    ->middleware('account.writable');
 
 Route::patch('chats/{chatId}/archivar', [MensajeriaController::class, 'archivar'])
-    ->whereNumber('chatId');
+    ->whereNumber('chatId')
+    ->middleware('account.writable');
 
 Route::patch('chats/{chatId}/desarchivar', [MensajeriaController::class, 'desarchivar'])
-    ->whereNumber('chatId');
+    ->whereNumber('chatId')
+    ->middleware('account.writable');
 
 Route::patch('chats/{chatId}/bloquear', [MensajeriaController::class, 'bloquear'])
-    ->whereNumber('chatId');
+    ->whereNumber('chatId')
+    ->middleware('account.writable');
 
 Route::patch('chats/{chatId}/desbloquear', [MensajeriaController::class, 'desbloquear'])
-    ->whereNumber('chatId');
+    ->whereNumber('chatId')
+    ->middleware('account.writable');
