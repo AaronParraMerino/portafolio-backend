@@ -28,24 +28,36 @@ class AdminNotificacionGuardadoService
             return $this->sinAccion('El mensaje no puede estar vacio');
         }
 
+        $titulo = trim((string) ($data['titulo'] ?? 'Administracion'));
         $tipo = trim((string) ($data['tipo'] ?? 'general'));
         $envioId = (string) Str::uuid();
+        $metadata = [
+            'titulo' => $titulo,
+            'urgencia' => $data['urgencia'] ?? 'baja',
+            'canales' => $data['canales'] ?? ['inapp'],
+            'segmentos' => $data['segmentos'] ?? [],
+            'destinatarios' => $destinatarios->count(),
+            'audiencia_tipo' => $destinatarios->count() === 1 ? 'individual' : 'segmentada',
+        ];
 
         $idNotificacion = DB::transaction(function () use (
             $idUsuarioActor,
             $data,
             $destinatarios,
             $mensaje,
+            $titulo,
             $tipo,
-            $envioId
+            $envioId,
+            $metadata
         ): int {
             $idNotificacion = DB::table('notificaciones')->insertGetId([
                 'id_usuario_actor' => $idUsuarioActor,
                 'modulo' => 'administracion',
                 'tipo' => 'admin_notice_' . $tipo,
                 'mensaje' => $mensaje,
+                'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
                 'contexto_referencia' => 'admin_' . $envioId,
-                'grupo_titulo' => 'Administracion',
+                'grupo_titulo' => $titulo,
                 'created_at' => now(),
                 'updated_at' => now(),
             ], 'id_notificacion');
@@ -73,11 +85,12 @@ class AdminNotificacionGuardadoService
             'data' => [
                 'id_notificacion' => $idNotificacion,
                 'id_envio' => $envioId,
+                'titulo' => $titulo,
                 'tipo' => $tipo,
                 'mensaje' => $mensaje,
-                'urgencia' => $data['urgencia'] ?? null,
-                'canales' => $data['canales'] ?? ['inapp'],
-                'segmentos' => $data['segmentos'] ?? [],
+                'urgencia' => $metadata['urgencia'],
+                'canales' => $metadata['canales'],
+                'segmentos' => $metadata['segmentos'],
                 'destinatarios' => $destinatarios->count(),
                 'created_at' => now()->toISOString(),
             ],
