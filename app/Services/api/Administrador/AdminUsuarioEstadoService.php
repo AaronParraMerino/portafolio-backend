@@ -4,8 +4,8 @@ namespace App\Services\api\Administrador;
 
 use App\Models\Usuario;
 use App\Services\api\AdminNotificacionGuardadoService;
+use App\Services\api\CorreoEnvioService;
 use App\Services\api\UsuarioService;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -14,6 +14,7 @@ class AdminUsuarioEstadoService
     public function __construct(
         private readonly UsuarioService $usuarioService,
         private readonly AdminNotificacionGuardadoService $adminNotificationGuardadoService,
+        private readonly ?CorreoEnvioService $correoEnvioService = null,
     ) {}
 
     public function activate(int $adminId, int $userId, string $message, array $channels): array
@@ -85,7 +86,7 @@ class AdminUsuarioEstadoService
         );
     }
 
-    public function pause(int $adminId, int $userId, string $reason): array
+    public function pause(int $adminId, int $userId, string $reason, array $channels): array
     {
         $user = $this->usuarioService->findById($userId);
         if (! $user) {
@@ -99,19 +100,30 @@ class AdminUsuarioEstadoService
         }
 
         $this->usuarioService->pause($user);
-        $this->createInAppNotice($adminId, $user, $reason, 'cuenta', 'media', ['inapp']);
+        [$sent, $failed] = $this->notify(
+            $adminId,
+            $user,
+            $reason,
+            $channels,
+            'media',
+            'Tu cuenta ha sido puesta en pausa',
+            'emails.cuenta_pausada',
+            'pausa'
+        );
 
         return $this->success(
-            'Cuenta puesta en pausa y motivo registrado correctamente.',
+            empty($failed)
+                ? 'Cuenta puesta en pausa y aviso enviado correctamente.'
+                : 'Cuenta puesta en pausa. No fue posible enviar todos los avisos.',
             $user,
             'pausado',
             $reason,
-            ['inapp'],
-            []
+            $sent,
+            $failed
         );
     }
 
-    public function block(int $adminId, int $userId, string $reason): array
+    public function block(int $adminId, int $userId, string $reason, array $channels): array
     {
         $user = $this->usuarioService->findById($userId);
         if (! $user) {
@@ -122,15 +134,26 @@ class AdminUsuarioEstadoService
         }
 
         $this->usuarioService->block($user);
-        $this->createInAppNotice($adminId, $user, $reason, 'seguridad', 'alta', ['inapp']);
+        [$sent, $failed] = $this->notify(
+            $adminId,
+            $user,
+            $reason,
+            $channels,
+            'alta',
+            'Tu cuenta ha sido bloqueada',
+            'emails.cuenta_bloqueada',
+            'bloqueo'
+        );
 
         return $this->success(
-            'Cuenta bloqueada y motivo registrado correctamente.',
+            empty($failed)
+                ? 'Cuenta bloqueada y aviso enviado correctamente.'
+                : 'Cuenta bloqueada. No fue posible enviar todos los avisos.',
             $user,
             'bloqueado',
             $reason,
-            ['inapp'],
-            []
+            $sent,
+            $failed
         );
     }
 
@@ -148,7 +171,7 @@ class AdminUsuarioEstadoService
         $failed = [];
 
         if (in_array('inapp', $channels, true)) {
-            $this->createInAppNotice($adminId, $user, $message, 'cuenta', $urgency, $channels);
+            $this->createInAppNotice($adminId, $user, $message, 'cuenta', $urgency, $channels, $subject);
             $sent[] = 'inapp';
         }
 
@@ -175,9 +198,11 @@ class AdminUsuarioEstadoService
         string $type,
         string $urgency,
         array $channels,
+        string $title = 'Administracion',
     ): void {
         $this->adminNotificationGuardadoService->createAdminNotice($adminId, [
             'destinatarios' => [$user->id_usuario],
+            'titulo' => $title,
             'mensaje' => $message,
             'tipo' => $type,
             'urgencia' => $urgency,
@@ -188,31 +213,11 @@ class AdminUsuarioEstadoService
 
     private function sendEmail(Usuario $user, string $message, string $subject, string $view): void
     {
-        $apiKey = (string) env('SENDGRID_API_KEY', '');
-        $fromEmail = (string) env('SENDGRID_FROM_ADDRESS', env('MAIL_FROM_ADDRESS', ''));
-        $fromName = (string) env('SENDGRID_FROM_NAME', env('MAIL_FROM_NAME', 'Portafolio'));
-        $apiUrl = (string) env('SENDGRID_API_URL', 'https://api.sendgrid.com/v3/mail/send');
-
-        if ($apiKey === '' || $fromEmail === '') {
-            throw new \RuntimeException('Falta SENDGRID_API_KEY o SENDGRID_FROM_ADDRESS en .env');
-        }
-
-        $html = view($view, [
+        ($this->correoEnvioService ?? app(CorreoEnvioService::class))->enviarVista($user->correo, $subject, $view, [
             'nombre' => trim($user->nombre.' '.$user->apellido),
             'mensaje' => $message,
             'razon' => $message,
-        ])->render();
-
-        $response = Http::withToken($apiKey)->acceptJson()->post($apiUrl, [
-            'personalizations' => [['to' => [['email' => $user->correo]]]],
-            'from' => ['email' => $fromEmail, 'name' => $fromName],
-            'subject' => $subject,
-            'content' => [['type' => 'text/html', 'value' => $html]],
         ]);
-
-        if (! $response->successful()) {
-            throw new \RuntimeException('SendGrid API error '.$response->status().': '.$response->body());
-        }
     }
 
     private function success(

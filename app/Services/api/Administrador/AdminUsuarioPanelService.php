@@ -8,6 +8,7 @@ use App\Models\Notificacion;
 use App\Models\SesionBase;
 use App\Models\Usuario;
 use App\Services\api\ProfileImageVariantService;
+use Illuminate\Support\Facades\DB;
 
 class AdminUsuarioPanelService
 {
@@ -102,26 +103,73 @@ class AdminUsuarioPanelService
 
     private function communications(int $userCount)
     {
-        $adminCommunications = Notificacion::query()
+        $adminNotificationRows = Notificacion::query()
             ->withCount('notificacionUsuarios as destinatarios_count')
             ->where('modulo', 'administracion')
             ->where('tipo', 'like', 'admin_notice_%')
             ->orderByDesc('created_at')
             ->limit(1000)
-            ->get()
-            ->map(fn (Notificacion $notice): array => [
-                'id' => $notice->contexto_referencia ?? $notice->id_notificacion,
-                'titulo' => $notice->grupo_titulo ?? 'Administracion',
-                'cuerpo' => $notice->mensaje,
-                'tipo' => str_replace('admin_notice_', '', $notice->tipo),
-                'estado' => 'enviado',
-                'urgencia' => 'baja',
-                'destinatarios' => (int) $notice->destinatarios_count,
-                'creado' => $notice->created_at?->format('d/m/Y H:i'),
-                'created_at' => $notice->created_at?->toISOString(),
-                'segmentos' => [],
-                'canales' => ['inapp'],
-            ])
+            ->get();
+        $singleRecipientIds = $adminNotificationRows
+            ->filter(fn (Notificacion $notice) => (int) $notice->destinatarios_count === 1)
+            ->pluck('id_notificacion')
+            ->values();
+        $singleRecipients = $singleRecipientIds->isEmpty()
+            ? collect()
+            : DB::table('notificacion_usuario as nu')
+                ->join('usuarios as u', 'u.id_usuario', '=', 'nu.id_usuario')
+                ->whereIn('nu.id_notificacion', $singleRecipientIds)
+                ->select([
+                    'nu.id_notificacion',
+                    'u.id_usuario',
+                    'u.nombre',
+                    'u.apellido',
+                    'u.correo',
+                    'u.rol',
+                    'u.estado',
+                ])
+                ->get()
+                ->keyBy('id_notificacion');
+
+        $adminCommunications = $adminNotificationRows
+            ->map(function (Notificacion $notice) use ($singleRecipients): array {
+                $metadata = is_array($notice->metadata) ? $notice->metadata : [];
+                $destinatarios = (int) $notice->destinatarios_count;
+                $audienceKind = $metadata['audiencia_tipo'] ?? ($destinatarios === 1 ? 'individual' : 'segmentada');
+                $segments = $metadata['segmentos'] ?? [];
+                $singleRecipient = $destinatarios === 1
+                    ? $singleRecipients->get($notice->id_notificacion)
+                    : null;
+                $canDuplicate = ($audienceKind !== 'individual' && ! empty($segments)) || $singleRecipient !== null;
+
+                return [
+                    'id' => $notice->contexto_referencia ?? $notice->id_notificacion,
+                    'source' => 'admin_notification',
+                    'audience_kind' => $audienceKind,
+                    'id_notificacion' => (int) $notice->id_notificacion,
+                    'titulo' => $notice->grupo_titulo ?? $metadata['titulo'] ?? 'Administracion',
+                    'cuerpo' => $notice->mensaje,
+                    'tipo' => str_replace('admin_notice_', '', $notice->tipo),
+                    'estado' => 'enviado',
+                    'urgencia' => $metadata['urgencia'] ?? 'baja',
+                    'destinatarios' => $destinatarios,
+                    'creado' => $notice->created_at?->format('d/m/Y H:i'),
+                    'created_at' => $notice->created_at?->toISOString(),
+                    'segmentos' => $segments,
+                    'canales' => $metadata['canales'] ?? ['inapp'],
+                    'destinatario' => $singleRecipient ? [
+                        'id' => (int) $singleRecipient->id_usuario,
+                        'id_usuario' => (int) $singleRecipient->id_usuario,
+                        'nombre' => trim($singleRecipient->nombre.' '.$singleRecipient->apellido),
+                        'email' => $singleRecipient->correo,
+                        'rol' => $singleRecipient->rol,
+                        'estado' => $singleRecipient->estado,
+                    ] : null,
+                    'editable' => false,
+                    'deletable' => false,
+                    'actions' => $canDuplicate ? ['view', 'duplicate'] : ['view'],
+                ];
+            })
             ->values();
 
         $globalCommunications = Aviso::query()
@@ -131,10 +179,13 @@ class AdminUsuarioPanelService
             ->get()
             ->map(fn (Aviso $notice): array => [
                 'id' => 'global_'.$notice->id_aviso,
+                'source' => 'global_aviso',
+                'id_aviso' => (int) $notice->id_aviso,
                 'titulo' => $notice->titulo,
                 'cuerpo' => $notice->mensaje,
                 'tipo' => $notice->tipo,
                 'estado' => $notice->estado === Aviso::ESTADO_ACTIVO ? 'enviado' : 'archivado',
+                'estado_aviso' => $notice->estado,
                 'urgencia' => match ($notice->prioridad) {
                     Aviso::PRIORIDAD_NORMAL => 'media',
                     Aviso::PRIORIDAD_CRITICA => 'alta',
@@ -145,6 +196,9 @@ class AdminUsuarioPanelService
                 'created_at' => $notice->created_at?->toISOString(),
                 'segmentos' => ['todos'],
                 'canales' => ['inapp'],
+                'editable' => true,
+                'deletable' => true,
+                'actions' => ['edit', 'toggle_status', 'delete'],
             ]);
 
         return $adminCommunications->concat($globalCommunications)->sortByDesc('created_at')->values();

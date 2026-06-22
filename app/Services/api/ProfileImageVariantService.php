@@ -3,6 +3,7 @@
 namespace App\Services\api;
 
 use RuntimeException;
+use Illuminate\Support\Facades\Http;
 
 class ProfileImageVariantService
 {
@@ -107,25 +108,26 @@ class ProfileImageVariantService
 
     public function originalExists(string $url): bool
     {
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $url,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => ['Range: bytes=0-0'],
-        ]);
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Range' => 'bytes=0-0',
+                ])
+                ->get($url);
+        } catch (\Throwable $exception) {
+            throw new RuntimeException('No se pudo comprobar la imagen original.', 0, $exception);
+        }
 
-        $response = curl_exec($ch);
-        $error = curl_error($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        $payload = is_string($response) ? json_decode($response, true) : null;
-        if ($status === 404 || (int) ($payload['statusCode'] ?? 0) === 404) {
+        $payload = json_decode($response->body(), true);
+        if ($response->status() === 404 || (int) ($payload['statusCode'] ?? 0) === 404) {
             return false;
         }
 
-        if ($error || $status < 200 || $status >= 300 || ! is_string($response)) {
-            throw new RuntimeException('No se pudo comprobar la imagen original.');
+        if (! $response->successful()) {
+            throw new RuntimeException(
+                'No se pudo comprobar la imagen original. HTTP ' .
+                $response->status() . ' - ' . $response->body()
+            );
         }
 
         return true;
@@ -300,77 +302,71 @@ class ProfileImageVariantService
     private function uploadObject(string $path, string $content, string $mimeType): void
     {
         [$urlBase, $bucket, $key] = $this->storageConfig();
-        $ch = curl_init();
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => "{$urlBase}/storage/v1/object/{$bucket}/{$path}",
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => $content,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $key,
-                'apikey: ' . $key,
-                'Content-Type: ' . $mimeType,
-                'x-upsert: true',
-            ],
-        ]);
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $key,
+                    'apikey' => $key,
+                    'Content-Type' => $mimeType,
+                    'x-upsert' => 'true',
+                ])
+                ->withBody($content, $mimeType)
+                ->post("{$urlBase}/storage/v1/object/{$bucket}/{$path}");
+        } catch (\Throwable $exception) {
+            throw new RuntimeException('Error al subir variante de imagen.', 0, $exception);
+        }
 
-        $response = curl_exec($ch);
-        $error = curl_error($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($error || $status < 200 || $status >= 300) {
-            throw new RuntimeException('Error al subir variante de imagen: ' . ($error ?: (string) $response));
+        if (! $response->successful()) {
+            throw new RuntimeException(
+                'Error al subir variante de imagen. HTTP ' .
+                $response->status() . ' - ' . $response->body()
+            );
         }
     }
 
     private function deleteObject(string $path): void
     {
         [$urlBase, $bucket, $key] = $this->storageConfig();
-        $ch = curl_init();
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => "{$urlBase}/storage/v1/object/{$bucket}/{$path}",
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'DELETE',
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $key,
-                'apikey: ' . $key,
-            ],
-        ]);
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $key,
+                    'apikey' => $key,
+                ])
+                ->delete("{$urlBase}/storage/v1/object/{$bucket}/{$path}");
+        } catch (\Throwable $exception) {
+            throw new RuntimeException('No se pudo eliminar una variante de imagen de Supabase Storage.', 0, $exception);
+        }
 
-        $response = curl_exec($ch);
-        $error = curl_error($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $payload = json_decode($response->body(), true);
+        $notFound = $response->status() === 404 || (int) ($payload['statusCode'] ?? 0) === 404;
 
-        $payload = is_string($response) ? json_decode($response, true) : null;
-        $notFound = $status === 404 || (int) ($payload['statusCode'] ?? 0) === 404;
-
-        if ($error || (! $notFound && ($status < 200 || $status >= 300))) {
-            throw new RuntimeException('No se pudo eliminar una variante de imagen de Supabase Storage.');
+        if (! $notFound && ! $response->successful()) {
+            throw new RuntimeException(
+                'No se pudo eliminar una variante de imagen de Supabase Storage. HTTP ' .
+                $response->status() . ' - ' . $response->body()
+            );
         }
     }
 
     private function download(string $url): string
     {
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $url,
-            CURLOPT_RETURNTRANSFER => true,
-        ]);
-
-        $content = curl_exec($ch);
-        $error = curl_error($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($error || $status < 200 || $status >= 300 || ! is_string($content)) {
-            throw new RuntimeException('No se pudo descargar la imagen original.');
+        try {
+            $response = Http::timeout(15)->get($url);
+        } catch (\Throwable $exception) {
+            throw new RuntimeException('No se pudo descargar la imagen original.', 0, $exception);
         }
 
-        return $content;
+        if (! $response->successful()) {
+            throw new RuntimeException(
+                'No se pudo descargar la imagen original. HTTP ' .
+                $response->status() . ' - ' . $response->body()
+            );
+        }
+
+        return $response->body();
     }
 
     private function storageConfig(): array

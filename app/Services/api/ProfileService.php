@@ -8,13 +8,13 @@ use App\Models\Perfil;
 use App\Models\VisibilidadCampo;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
 use App\Services\BitacoraService;
 
 class ProfileService
 {
     public function __construct(
-        private readonly ProfileImageVariantService $imageVariants,
-        private readonly ContenidoAutoTraduccionService $autoTraduccionService
+        private readonly ProfileImageVariantService $imageVariants
     ) {
     }
  
@@ -183,19 +183,6 @@ class ProfileService
             }
         });
 
-        if ($dataperfil !== []) {
-            $perfil = Perfil::where('usuario_id', $userId)->first();
-
-            if ($perfil) {
-                $this->autoTraduccionService->traducirEntidad(
-                    'perfil',
-                    (int) $perfil->id_perfil,
-                    $userId,
-                    array_intersect_key($dataperfil, array_flip(['profesion', 'biografia']))
-                );
-            }
-        }
-
         return $this->getProfile($userId);
     }
 
@@ -270,32 +257,34 @@ class ProfileService
         function uploadImage($file, string $carpeta)
     {
         $bucket = env('SUPABASE_BUCKET');
-        $urlBase = env('SUPABASE_URL');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
         $key = env('SUPABASE_KEY');
 
-        $nombreArchivo = $carpeta . '/' . Str::uuid() . '.' . $file->getClientOriginalExtension();
+        if (!$bucket || !$urlBase || !$key) {
+            throw new \Exception('Configuración de Supabase incompleta. Verifica SUPABASE_URL, SUPABASE_BUCKET y SUPABASE_KEY.');
+        }
 
+        $mimeType = $file->getMimeType() ?: 'application/octet-stream';
+        $nombreArchivo = $carpeta . '/' . Str::uuid() . '.' . $file->getClientOriginalExtension();
         $fileContent = file_get_contents($file->getRealPath());
 
-        $ch = curl_init();
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $key,
+                    'apikey' => $key,
+                    'Content-Type' => $mimeType,
+                ])
+                ->withBody($fileContent, $mimeType)
+                ->post($urlBase . '/storage/v1/object/' . $bucket . '/' . $nombreArchivo);
+        } catch (\Throwable $exception) {
+            throw new \Exception('Error al conectar con Supabase Storage: ' . $exception->getMessage(), 0, $exception);
+        }
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $nombreArchivo,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => $fileContent,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $key,
-                'Content-Type: ' . $file->getMimeType(),
-            ],
-        ]);
-
-        $response = curl_exec($ch);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($error) {
-            throw new \Exception('Error al subir imagen a Supabase: ' . $error);
+        if ($response->failed()) {
+            throw new \Exception(
+                'Supabase rechazó la subida de imagen. HTTP ' . $response->status() . ' - ' . $response->body()
+            );
         }
 
         return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $nombreArchivo;
@@ -310,29 +299,41 @@ class ProfileService
         function deleteImage(string $urlImagen)
     {
         $bucket = env('SUPABASE_BUCKET');
-        $urlBase = env('SUPABASE_URL');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
         $key = env('SUPABASE_KEY');
 
-        // Extraer path del archivo desde la URL pública
-        $path = str_replace($urlBase . '/storage/v1/object/public/' . $bucket . '/', '', $urlImagen);
+        if (!$bucket || !$urlBase || !$key) {
+            throw new \Exception('Configuración de Supabase incompleta. Verifica SUPABASE_URL, SUPABASE_BUCKET y SUPABASE_KEY.');
+        }
 
-        $ch = curl_init();
+        // Extraer path del archivo desde la URL pública de Supabase.
+        $prefix = $urlBase . '/storage/v1/object/public/' . $bucket . '/';
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $path,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'DELETE',
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $key,
-            ],
-        ]);
+        if (!str_starts_with($urlImagen, $prefix)) {
+            Log::warning('No se eliminó la imagen porque no parece ser una URL pública de Supabase.', [
+                'url' => $urlImagen,
+            ]);
 
-        $response = curl_exec($ch);
-        $error = curl_error($ch);
-        curl_close($ch);
+            return false;
+        }
 
-        if ($error) {
-            throw new \Exception('Error eliminando archivo en Supabase: ' . $error);
+        $path = ltrim(str_replace($prefix, '', $urlImagen), '/');
+
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $key,
+                    'apikey' => $key,
+                ])
+                ->delete($urlBase . '/storage/v1/object/' . $bucket . '/' . $path);
+        } catch (\Throwable $exception) {
+            throw new \Exception('Error al conectar con Supabase Storage para eliminar imagen: ' . $exception->getMessage(), 0, $exception);
+        }
+
+        if ($response->failed() && $response->status() !== 404) {
+            throw new \Exception(
+                'Supabase rechazó la eliminación de imagen. HTTP ' . $response->status() . ' - ' . $response->body()
+            );
         }
 
         return true;
@@ -396,6 +397,8 @@ class ProfileService
      */
     function deleteProfileBannerImage(int $userId, string $tipo)
     {
+        $urlImagen = null;
+
         DB::beginTransaction();
 
         try {
@@ -409,8 +412,6 @@ class ProfileService
                 throw new \Exception('Tipo inválido');
             }
 
-            $urlImagen = null;
-
             if ($tipo === 'profile') {
                 $urlImagen = $perfil->foto_perfil;
                 $perfil->foto_perfil = null;
@@ -419,25 +420,20 @@ class ProfileService
                 $perfil->foto_fondo = null;
             }
 
-            if ($urlImagen) {
-                if ($tipo === 'profile') {
-                    $this->imageVariants->deleteVariants($urlImagen);
-                } else {
-                    $this->imageVariants->deleteBannerVariants($urlImagen);
-                }
-                $this->deleteImage($urlImagen);
-            }
-
             $perfil->save();
 
             DB::commit();
+
+            if ($urlImagen) {
+                $this->deletePreviousProfileImageSafely($urlImagen, $tipo);
+            }
 
             return [
                 'status' => true,
                 'message' => 'Imagen eliminada correctamente'
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
 
             return [
@@ -455,6 +451,9 @@ class ProfileService
 
         function updateProfileBannerImage(int $userId, $file, string $tipo)
     {
+        $urlAnterior = null;
+        $urlNueva = null;
+
         DB::beginTransaction();
 
         try {
@@ -468,45 +467,28 @@ class ProfileService
                 throw new \Exception('Tipo inválido');
             }
 
-            $urlAnterior = null;
-
-            if ($tipo === 'profile') {
-                $urlAnterior = $perfil->foto_perfil;
-            } else {
-                $urlAnterior = $perfil->foto_fondo;
-            }
+            $urlAnterior = $tipo === 'profile'
+                ? $perfil->foto_perfil
+                : $perfil->foto_fondo;
 
             $carpeta = $tipo === 'profile' ? 'profile' : 'banner';
             $urlNueva = $this->uploadImage($file, $carpeta);
 
             if ($tipo === 'profile') {
                 $this->generateProfileVariantsSafely($file, $urlNueva);
-            } else {
-                $this->generateBannerVariantsSafely($file, $urlNueva);
-            }
-
-            if ($urlAnterior) {
-                try {
-                    if ($tipo === 'profile') {
-                        $this->imageVariants->deleteVariants($urlAnterior);
-                    } else {
-                        $this->imageVariants->deleteBannerVariants($urlAnterior);
-                    }
-                    $this->deleteImage($urlAnterior);
-                } catch (\Exception $e) {
-                    // No detenemos el proceso si falla la eliminación
-                }
-            }
-
-            if ($tipo === 'profile') {
                 $perfil->foto_perfil = $urlNueva;
             } else {
+                $this->generateBannerVariantsSafely($file, $urlNueva);
                 $perfil->foto_fondo = $urlNueva;
             }
 
             $perfil->save();
 
             DB::commit();
+
+            if ($urlAnterior) {
+                $this->deletePreviousProfileImageSafely($urlAnterior, $tipo);
+            }
 
             return [
                 'status' => true,
@@ -515,14 +497,37 @@ class ProfileService
                 ...($tipo === 'profile' ? $this->variantResponse($urlNueva) : $this->bannerVariantResponse($urlNueva)),
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
+
+            if ($urlNueva) {
+                $this->deletePreviousProfileImageSafely($urlNueva, $tipo);
+            }
 
             return [
                 'status' => false,
                 'message' => 'Error al actualizar imagen',
                 'error' => $e->getMessage()
             ];
+        }
+    }
+
+    private function deletePreviousProfileImageSafely(string $urlImagen, string $tipo): void
+    {
+        try {
+            if ($tipo === 'profile') {
+                $this->imageVariants->deleteVariants($urlImagen);
+            } else {
+                $this->imageVariants->deleteBannerVariants($urlImagen);
+            }
+
+            $this->deleteImage($urlImagen);
+        } catch (\Throwable $e) {
+            Log::warning('No se pudo eliminar la imagen anterior del perfil/banner.', [
+                'tipo' => $tipo,
+                'url' => $urlImagen,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
@@ -571,3 +576,4 @@ class ProfileService
         ];
     }
 }
+

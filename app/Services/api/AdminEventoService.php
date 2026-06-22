@@ -10,6 +10,7 @@ use App\Models\Usuario;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -751,7 +752,15 @@ class AdminEventoService
     {
         if ($event->imagen_portada_path) {
             if ($this->isSupabaseCoverImage($event->imagen_portada_path, $event->imagen_portada_url)) {
-                $this->deleteCoverImageFromSupabase($event->imagen_portada_path);
+                try {
+                    $this->deleteCoverImageFromSupabase($event->imagen_portada_path);
+                } catch (\Throwable $exception) {
+                    Log::warning('No se pudo eliminar la portada anterior del evento en Supabase Storage.', [
+                        'evento_id' => $event->id_evento,
+                        'path' => $event->imagen_portada_path,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
             } else {
                 Storage::disk('public')->delete($event->imagen_portada_path);
             }
@@ -781,30 +790,33 @@ class AdminEventoService
             return null;
         }
 
-        $ch = curl_init();
+        $mimeType = $image->getMimeType() ?: 'application/octet-stream';
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $path,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => $content,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $key,
-                'apikey: ' . $key,
-                'Content-Type: ' . ($image->getMimeType() ?: 'application/octet-stream'),
-            ],
-        ]);
-
-        curl_exec($ch);
-        $error = curl_error($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($error || $status >= 400) {
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $key,
+                    'apikey' => $key,
+                    'Content-Type' => $mimeType,
+                ])
+                ->withBody($content, $mimeType)
+                ->post($urlBase . '/storage/v1/object/' . $bucket . '/' . $path);
+        } catch (\Throwable $exception) {
             Log::warning('No se pudo subir la portada del evento a Supabase Storage; se usara storage local.', [
                 'evento_id' => $event->id_evento,
-                'status' => $status,
-                'error' => $error,
+                'path' => $path,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if ($response->failed()) {
+            Log::warning('Supabase rechazo la subida de portada del evento; se usara storage local.', [
+                'evento_id' => $event->id_evento,
+                'path' => $path,
+                'status' => $response->status(),
+                'response' => $response->body(),
             ]);
 
             return null;
@@ -836,20 +848,24 @@ class AdminEventoService
             return;
         }
 
-        $ch = curl_init();
+        $storagePath = ltrim($path, '/');
 
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . ltrim($path, '/'),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'DELETE',
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $key,
-                'apikey: ' . $key,
-            ],
-        ]);
+        $response = Http::timeout(15)
+            ->withHeaders([
+                'Authorization' => 'Bearer ' . $key,
+                'apikey' => $key,
+            ])
+            ->delete($urlBase . '/storage/v1/object/' . $bucket . '/' . $storagePath);
 
-        curl_exec($ch);
-        curl_close($ch);
+        $payload = json_decode($response->body(), true);
+        $notFound = $response->status() === 404 || (int) ($payload['statusCode'] ?? 0) === 404;
+
+        if (! $notFound && $response->failed()) {
+            throw new \RuntimeException(
+                'Supabase rechazo la eliminacion de portada del evento. HTTP ' .
+                $response->status() . ' - ' . $response->body()
+            );
+        }
     }
 
     private function resolveCoverImageUrl(AdminEvento $event): ?string

@@ -2,11 +2,11 @@
 
 namespace App\Services\api\Proyecto;
 
-use App\Services\api\ContenidoAutoTraduccionService;
 use App\Services\api\ProfileImageVariantService;
 use App\Services\api\ProyectoNotificacionGuardadoService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class ProyectoCicloVidaService
@@ -14,7 +14,6 @@ class ProyectoCicloVidaService
     public function __construct(
         private readonly ProyectoNotificacionGuardadoService $proyectoNotificacionGuardadoService,
         private readonly ProfileImageVariantService $profileImageVariants,
-        private readonly ContenidoAutoTraduccionService $autoTraduccionService,
     ) {}
 
     public function deletionPreview(int $idProyecto): array
@@ -155,10 +154,6 @@ class ProyectoCicloVidaService
 
     private function permanentlyDelete(int $userId, int $idProyecto, array $preview): array
     {
-        $participacionIds = DB::table('participaciones')
-            ->where('id_proyecto', $idProyecto)
-            ->pluck('id_participacion');
-
         $evidences = DB::table('proyecto_evidencias')
             ->where('id_proyecto', $idProyecto)
             ->get(['tipo', 'url', 'archivo_path']);
@@ -177,11 +172,6 @@ class ProyectoCicloVidaService
 
             DB::table('proyectos')->where('id_proyecto', $idProyecto)->delete();
         });
-
-        $this->autoTraduccionService->eliminarEntidad('proyecto', $idProyecto);
-        foreach ($participacionIds as $participacionId) {
-            $this->autoTraduccionService->eliminarEntidad('participacion', (int) $participacionId);
-        }
 
         $this->deleteEvidenceFiles($evidences);
 
@@ -304,17 +294,28 @@ class ProyectoCicloVidaService
             return;
         }
 
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL => rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.ltrim($path, '/'),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => 'DELETE',
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer '.$key,
-                'apikey: '.$key,
-            ],
-        ]);
-        curl_exec($ch);
-        curl_close($ch);
+        $normalizedPath = ltrim($path, '/');
+
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer '.$key,
+                    'apikey' => $key,
+                ])
+                ->delete(rtrim($urlBase, '/').'/storage/v1/object/'.$bucket.'/'.$normalizedPath);
+
+            if ($response->failed() && $response->status() !== 404) {
+                Log::warning('No se pudo eliminar un archivo de Supabase al borrar definitivamente un proyecto.', [
+                    'path' => $normalizedPath,
+                    'status' => $response->status(),
+                    'response' => $response->body(),
+                ]);
+            }
+        } catch (\Throwable $exception) {
+            Log::warning('No se pudo eliminar un archivo de Supabase al borrar definitivamente un proyecto.', [
+                'path' => $normalizedPath,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 }
