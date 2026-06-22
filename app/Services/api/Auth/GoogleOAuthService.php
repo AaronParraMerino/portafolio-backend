@@ -3,6 +3,7 @@
 namespace App\Services\api\Auth;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class GoogleOAuthService
@@ -90,7 +91,7 @@ class GoogleOAuthService
         }
 
         $bucket = env('SUPABASE_BUCKET');
-        $urlBase = env('SUPABASE_URL');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
         $key = env('SUPABASE_KEY');
 
         if (! $bucket || ! $urlBase || ! $key) {
@@ -100,40 +101,52 @@ class GoogleOAuthService
         try {
             $imageResponse = Http::timeout(10)->get($imageUrl);
             if (! $imageResponse->ok()) {
+                Log::warning('No se pudo descargar la foto de Google para guardarla en Supabase Storage.', [
+                    'status' => $imageResponse->status(),
+                    'source_url' => $imageUrl,
+                ]);
+
                 return $imageUrl;
             }
 
             $contentType = $imageResponse->header('Content-Type') ?: 'image/jpeg';
-            $extension = 'jpg';
-            if (str_contains($contentType, '/')) {
-                $extension = explode('/', $contentType)[1] ?: 'jpg';
-                $extension = strtolower(explode(';', $extension)[0]);
-            }
+            $mimeType = strtolower(explode(';', $contentType)[0]);
+
+            $extension = match ($mimeType) {
+                'image/png' => 'png',
+                'image/webp' => 'webp',
+                'image/gif' => 'gif',
+                'image/svg+xml' => 'svg',
+                default => 'jpg',
+            };
 
             $filePath = 'profile/' . Str::uuid() . '.' . $extension;
-            $ch = curl_init();
 
-            curl_setopt_array($ch, [
-                CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $filePath,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_CUSTOMREQUEST => 'POST',
-                CURLOPT_POSTFIELDS => $imageResponse->body(),
-                CURLOPT_HTTPHEADER => [
-                    'Authorization: Bearer ' . $key,
-                    'Content-Type: ' . $contentType,
-                ],
-            ]);
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $key,
+                    'apikey' => $key,
+                    'Content-Type' => $contentType,
+                ])
+                ->withBody($imageResponse->body(), $contentType)
+                ->post($urlBase . '/storage/v1/object/' . $bucket . '/' . $filePath);
 
-            curl_exec($ch);
-            $error = curl_error($ch);
-            curl_close($ch);
+            if ($response->failed()) {
+                Log::warning('No se pudo guardar la foto de Google en Supabase Storage.', [
+                    'status' => $response->status(),
+                    'response' => $response->body(),
+                    'path' => $filePath,
+                ]);
 
-            if ($error) {
                 return $imageUrl;
             }
 
             return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $filePath;
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            Log::warning('No se pudo guardar la foto de Google en Supabase Storage.', [
+                'error' => $exception->getMessage(),
+            ]);
+
             return $imageUrl;
         }
     }

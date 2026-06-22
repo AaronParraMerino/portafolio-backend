@@ -5,6 +5,7 @@ namespace App\Services\api;
 use App\Models\Tecnologia;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class TecnologiaService
@@ -272,7 +273,7 @@ class TecnologiaService
     private function subirIconoASupabase(string $imageUrl, string $carpeta): ?string
     {
         $bucket = env('SUPABASE_BUCKET');
-        $urlBase = env('SUPABASE_URL');
+        $urlBase = rtrim((string) env('SUPABASE_URL'), '/');
         $key = env('SUPABASE_KEY');
 
         if (! $bucket || ! $urlBase || ! $key) {
@@ -283,6 +284,12 @@ class TecnologiaService
             $imageResponse = Http::timeout(15)->get($imageUrl);
 
             if (! $imageResponse->ok()) {
+                Log::warning('No se pudo descargar el icono de la tecnologia.', [
+                    'image_url' => $imageUrl,
+                    'status' => $imageResponse->status(),
+                    'response' => $imageResponse->body(),
+                ]);
+
                 return $imageUrl;
             }
 
@@ -292,30 +299,33 @@ class TecnologiaService
             $nombreArchivo = trim($carpeta, '/') . '/' . Str::uuid() . '.' . $extension;
             $fileContent = $imageResponse->body();
 
-            $ch = curl_init();
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $key,
+                    'apikey' => $key,
+                    'Content-Type' => $contentType,
+                ])
+                ->withBody($fileContent, $contentType)
+                ->post($urlBase . '/storage/v1/object/' . $bucket . '/' . $nombreArchivo);
 
-            curl_setopt_array($ch, [
-                CURLOPT_URL => $urlBase . '/storage/v1/object/' . $bucket . '/' . $nombreArchivo,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_CUSTOMREQUEST => 'POST',
-                CURLOPT_POSTFIELDS => $fileContent,
-                CURLOPT_HTTPHEADER => [
-                    'Authorization: Bearer ' . $key,
-                    'apikey: ' . $key,
-                    'Content-Type: ' . $contentType,
-                ],
-            ]);
+            if ($response->failed()) {
+                Log::warning('No se pudo subir el icono de la tecnologia a Supabase Storage.', [
+                    'image_url' => $imageUrl,
+                    'path' => $nombreArchivo,
+                    'status' => $response->status(),
+                    'response' => $response->body(),
+                ]);
 
-            curl_exec($ch);
-            $error = curl_error($ch);
-            curl_close($ch);
-
-            if ($error) {
                 return $imageUrl;
             }
 
             return $urlBase . '/storage/v1/object/public/' . $bucket . '/' . $nombreArchivo;
         } catch (\Throwable $e) {
+            Log::warning('No se pudo guardar el icono de la tecnologia en Supabase Storage.', [
+                'image_url' => $imageUrl,
+                'error' => $e->getMessage(),
+            ]);
+
             return $imageUrl;
         }
     }
