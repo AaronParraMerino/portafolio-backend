@@ -1,0 +1,27 @@
+{
+  "short_name": "CreaFolio",
+  "name": "CreaFolio",
+  "description": "Crea y descubre portafolios profesionales, proyectos y eventos de desarrolladores.",
+  "icons": [
+    {
+      "src": "favicon.ico?v=2",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png?v=2",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo512.png?v=2",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0077b7",
+  "background_color": "#ffffff"
+}

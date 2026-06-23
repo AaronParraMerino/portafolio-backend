@@ -55,3 +55,4 @@ CMD bash -c 'export PORT=${PORT:-10000} && \
     php artisan route:clear && \
     php artisan config:cache && \
     apache2-foreground'
+    
